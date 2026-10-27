@@ -308,6 +308,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="print messages, do not send, do not save state")
     ap.add_argument("--only", help="comma separated names, e.g. EURUSD,SPX")
     ap.add_argument("--lookback", type=int, default=LOOKBACK_BARS)
+    ap.add_argument("--demo", action="store_true", help="send the most recent PAST signal of each kind, labelled DEMO")
     ap.add_argument("--test-telegram", action="store_true", help="send one test message and exit")
     args = ap.parse_args()
 
@@ -320,6 +321,7 @@ def main():
     state = load_state()
     sent = 0
     loaded = 0
+    demo = []
     for name in names:
         sym = TICKERS_CFG.get(name)
         if not sym:
@@ -336,9 +338,14 @@ def main():
             last = len(bars) - 1
             for side, dd in (("long", d), ("short", mirror(d))):
                 for i, ev, level in track(dd):
-                    if ev not in SEND_EVENTS or i < last - args.lookback + 1:
+                    if ev not in SEND_EVENTS:
                         continue
                     lvl = level if side == "long" else -level
+                    if args.demo:
+                        demo.append((times[i], name, side, ev, lvl))
+                        continue
+                    if i < last - args.lookback + 1:
+                        continue
                     key = f"{name}|{side}|{ev}"
                     bar_iso = times[i].isoformat()
                     if state.get(key) == bar_iso:
@@ -353,6 +360,19 @@ def main():
             raise
         except Exception as e:
             print(f"{name}: error {type(e).__name__}: {e}")
+    if args.demo:
+        # most recent past signal of each kind (per side), labelled DEMO; does not touch the saved state
+        latest = {}
+        for t, name, side, ev, lvl in demo:
+            if (side, ev) not in latest or t > latest[(side, ev)][0]:
+                latest[(side, ev)] = (t, name, side, ev, lvl)
+        for t, name, side, ev, lvl in sorted(latest.values(), key=lambda x: x[0]):
+            msg = "🧪 DEMO (past signal, not live) " + message(name, side, ev, lvl, t)
+            print(msg)
+            if not args.dry_run:
+                send_telegram(msg)
+        print(f"demo done, {len(latest)} message(s)")
+        return
     if not args.dry_run:
         save_state(state)
     print(f"done, {sent} message(s) sent, {loaded}/{len(names)} tickers loaded" if not args.dry_run else "dry run done")

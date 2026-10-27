@@ -1,4 +1,4 @@
-﻿name: RSI 4H scanner
+name: RSI 4H scanner
 
 on:
   schedule:
@@ -7,6 +7,10 @@ on:
     inputs:
       test:
         description: "Send one test Telegram message instead of scanning"
+        type: boolean
+        default: false
+      demo:
+        description: "Send the most recent PAST signal of each kind (labelled DEMO)"
         type: boolean
         default: false
 
@@ -33,8 +37,14 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      - name: Demo signals
+        if: ${{ github.event.inputs.demo == 'true' }}
+        run: python rsi_tracker_scanner.py --demo
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       - name: Scan
-        if: ${{ github.event.inputs.test != 'true' }}
+        if: ${{ github.event.inputs.test != 'true' && github.event.inputs.demo != 'true' }}
         run: python rsi_tracker_scanner.py
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
