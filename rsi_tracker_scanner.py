@@ -73,7 +73,10 @@ P = dict(
     watch_bars=24, fail_expiry=80, max_attempts=2, break_on_close=True,
     arm_bars=120, sup_tol_mult=0.3, sup_bull=True, keep_on_fail=True, only_bd=True,
 )
-SEND_EVENTS = {"B+D", "S", "E"}      # per side; add "WATCH", "B", "B2" to also send those
+SEND_EVENTS = {"B+D", "S", "E"}      # per side; add "WATCH" to also send those
+LINE_ALERTS = True                   # green/red line: when it starts (B, B2), when it breaks (FAIL), when EMA200 is reached (TARGET)
+if LINE_ALERTS:
+    SEND_EVENTS |= {"B", "B2", "FAIL", "TARGET"}
 LOOKBACK_BARS = 2                    # alert on events from the last N closed 4H bars (dedupe prevents repeats)
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scanner_state.json")
 
@@ -161,6 +164,7 @@ def track(d):
         elif st == 2:
             brk = (c < cur_low) if P["break_on_close"] else (l < cur_low)
             if brk:
+                events.append((i, "FAIL", cur_low))
                 state = 0 if attempt >= P["max_attempts"] else 3
                 attempt += 1
                 prev_low, prev_rsi_low = cur_low, cur_rsi_low
@@ -168,6 +172,7 @@ def track(d):
                 break_bar = i
             else:
                 if h >= emas:
+                    events.append((i, "TARGET", emas))
                     state = 0
                 elif i - buy_bar > 150:
                     state = 0
@@ -282,24 +287,32 @@ def fmt(v):
 
 def message(name, side, ev, level, bar_time):
     long_ = side == "long"
-    dot = {"B+D": "🟢", "S": "🟢", "E": "🟠"}.get(ev, "🟢") if long_ else {"B+D": "🔴", "S": "🔴", "E": "🟠"}.get(ev, "🔴")
-    if ev == "WATCH":
-        dot = "🟡"
+    lv = fmt(level) if level == level else ""      # level == level is False for NaN
     if long_:
-        text = {"B+D": "B+D: buy signal with bullish RSI divergence",
-                "B": "B: first buy", "B2": "B2: retry buy, no divergence",
-                "S": "S: broke above EMA200, retest held as support",
-                "E": "E: RSI hit the extreme low and is back above 45, be ready",
-                "WATCH": "WATCH: RSI oversold, start watching"}[ev]
-        tail = f" Protected low {fmt(level)}." if ev in ("B+D", "B", "B2") else ""
+        dot = {"S": "🟢", "B+D": "🟢", "B": "🟢", "B2": "🟢", "E": "🟠", "WATCH": "🟡", "FAIL": "⚠️", "TARGET": "🎯"}[ev]
+        text = {
+            "B+D": f"B+D: buy signal with bullish RSI divergence. Support line (protected low) at {lv}",
+            "B": f"B: first buy. Support line (protected low) starts at {lv}",
+            "B2": f"B2: retry buy, no divergence. Support line (protected low) at {lv}",
+            "S": "S: broke above EMA200, retest held as support",
+            "E": "E: RSI hit the extreme low and is back above 45, be ready",
+            "WATCH": "WATCH: RSI oversold, start watching",
+            "FAIL": f"Support line {lv} BROKEN (close below it): setup failed",
+            "TARGET": f"Price reached EMA200 ({lv}): pull-up target hit, support line ends",
+        }[ev]
     else:
-        text = {"B+D": "S+D: sell signal with bearish RSI divergence",
-                "B": "S: first sell", "B2": "S2: retry sell, no divergence",
-                "S": "R: broke below EMA200, retest held as resistance",
-                "E": "E: RSI hit the extreme high and is back below 55, be ready",
-                "WATCH": "WATCH: RSI overbought, start watching"}[ev]
-        tail = f" Protected high {fmt(level)}." if ev in ("B+D", "B", "B2") else ""
-    return f"{dot} {name} 4H | {text}.{tail} (bar {bar_time:%Y-%m-%d %H:%M} UTC)"
+        dot = {"S": "🔴", "B+D": "🔴", "B": "🔴", "B2": "🔴", "E": "🟠", "WATCH": "🟡", "FAIL": "⚠️", "TARGET": "🎯"}[ev]
+        text = {
+            "B+D": f"S+D: sell signal with bearish RSI divergence. Resistance line (protected high) at {lv}",
+            "B": f"S: first sell. Resistance line (protected high) starts at {lv}",
+            "B2": f"S2: retry sell, no divergence. Resistance line (protected high) at {lv}",
+            "S": "R: broke below EMA200, retest held as resistance",
+            "E": "E: RSI hit the extreme high and is back below 55, be ready",
+            "WATCH": "WATCH: RSI overbought, start watching",
+            "FAIL": f"Resistance line {lv} BROKEN (close above it): setup failed",
+            "TARGET": f"Price reached EMA200 ({lv}): drop target hit, resistance line ends",
+        }[ev]
+    return f"{dot} {name} 4H | {text}. (bar {bar_time:%Y-%m-%d %H:%M} UTC)"
 
 
 # ---------------------------------------------------------------- main
