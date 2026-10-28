@@ -15,6 +15,10 @@ on:
         type: boolean
         default: false
 
+concurrency:
+  group: scanner
+  cancel-in-progress: false   # runs queue one after another so alerts are never duplicated
+
 jobs:
   scan:
     runs-on: ubuntu-latest
