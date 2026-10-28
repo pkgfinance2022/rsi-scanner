@@ -77,7 +77,7 @@ SEND_EVENTS = {"B+D", "S", "E"}      # per side; add "WATCH" to also send those
 LINE_ALERTS = True                   # green/red line: when it starts (B, B2), when it breaks (FAIL), when EMA200 is reached (TARGET)
 if LINE_ALERTS:
     SEND_EVENTS |= {"B", "B2", "FAIL", "TARGET"}
-LOOKBACK_BARS = 2                    # alert on events from the last N closed 4H bars (dedupe prevents repeats)
+LOOKBACK_BARS = 4                    # alert on events from the last N closed 4H bars (dedupe prevents repeats)
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scanner_state.json")
 
 

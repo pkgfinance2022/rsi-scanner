@@ -2,7 +2,8 @@ name: RSI 4H scanner
 
 on:
   schedule:
-    - cron: "5 * * * *"        # every hour at :05 (UTC); duplicates are suppressed by the saved state
+    - cron: "17 * * * *"       # two off-peak slots per hour (GitHub drops/delays scheduled runs);
+    - cron: "47 * * * *"       # duplicates are suppressed by the saved state
   workflow_dispatch:
     inputs:
       test:
