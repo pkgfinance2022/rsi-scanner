@@ -70,11 +70,14 @@ TICKERS_CFG = {
 
     # Crypto (24/7)
     "BTCUSD": "BTC-USD", "ETHUSD": "ETH-USD", "SOLUSD": "SOL-USD", "XRPUSD": "XRP-USD",
+
+    # Dollar index, yen futures, volatility indices
+    "DXY": "DX-Y.NYB", "6J1!": "6J=F", "VIX": "^VIX", "INDIAVIX": "^INDIAVIX",
 }
 
 # Round-the-clock markets: 4H bars anchored to a fixed UTC hour. Everything else: anchored to each day's session open.
 CONTINUOUS = {"USDCAD", "USDJPY", "GBPUSD", "EURUSD", "USDCHF", "AUDUSD", "NZDUSD",
-              "XAUUSD", "SILVER", "COPPER", "USOIL"}
+              "XAUUSD", "SILVER", "COPPER", "USOIL", "DXY", "6J1!"}
 CRYPTO = {"BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD"}   # 24/7: 4H bars open 00,04,08,12,16,20 UTC; weekly bar runs Mon-Sun
 FX_ANCHOR_HOUR_UTC = 1   # 4H bars open 01,05,09,13,17,21 UTC. CHECK against your TradingView chart; change if bars differ.
 
