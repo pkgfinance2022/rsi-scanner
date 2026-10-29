@@ -67,11 +67,15 @@ TICKERS_CFG = {
     "MCD": "MCD", "ASML": "ASML", "TSM": "TSM", "SNDK": "SNDK", "MSFT": "MSFT",
     "IDXX": "IDXX", "CDNS": "CDNS", "FTNT": "FTNT", "GD": "GD", "AVGO": "AVGO",
     "NVDA": "NVDA", "PANW": "PANW", "TSLA": "TSLA", "BX": "BX", "MSTR": "MSTR",
+
+    # Crypto (24/7)
+    "BTCUSD": "BTC-USD", "ETHUSD": "ETH-USD", "SOLUSD": "SOL-USD", "XRPUSD": "XRP-USD",
 }
 
 # Round-the-clock markets: 4H bars anchored to a fixed UTC hour. Everything else: anchored to each day's session open.
 CONTINUOUS = {"USDCAD", "USDJPY", "GBPUSD", "EURUSD", "USDCHF", "AUDUSD", "NZDUSD",
               "XAUUSD", "SILVER", "COPPER", "USOIL"}
+CRYPTO = {"BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD"}   # 24/7: 4H bars open 00,04,08,12,16,20 UTC; weekly bar runs Mon-Sun
 FX_ANCHOR_HOUR_UTC = 1   # 4H bars open 01,05,09,13,17,21 UTC. CHECK against your TradingView chart; change if bars differ.
 
 # ---------------------------------------------------------------- parameters (same defaults as the Pine scripts)
@@ -236,13 +240,13 @@ def track(d):
 
 
 # ---------------------------------------------------------------- data
-def to_4h(df, continuous):
+def to_4h(df, continuous, anchor_hour):
     df = df[["Open", "High", "Low", "Close"]].dropna()
     agg = {"Open": "first", "High": "max", "Low": "min", "Close": "last"}
     if continuous:
         df = df.copy()
         df.index = df.index.tz_convert("UTC")
-        out = df.resample("4h", offset=pd.Timedelta(hours=FX_ANCHOR_HOUR_UTC)).agg(agg).dropna()
+        out = df.resample("4h", offset=pd.Timedelta(hours=anchor_hour)).agg(agg).dropna()
         out["start"] = out.index
         return out
     # session markets: 4H buckets counted from each day's first bar
@@ -261,7 +265,7 @@ def load_4h(symbol, name):
     raw = yf.Ticker(symbol).history(period="730d", interval="1h", auto_adjust=False)
     if raw is None or raw.empty:
         return None
-    bars = to_4h(raw, name in CONTINUOUS)
+    bars = to_4h(raw, name in CONTINUOUS or name in CRYPTO, 0 if name in CRYPTO else FX_ANCHOR_HOUR_UTC)
     now = datetime.now(timezone.utc)
     start_utc = pd.DatetimeIndex(bars["start"]).tz_convert("UTC")
     closed = start_utc + pd.Timedelta(hours=4) <= now
@@ -281,7 +285,7 @@ def load_bars(symbol, name, tf):
         idx = idx.tz_localize("UTC")
     bars.index = idx
     bars["start"] = idx
-    span = pd.Timedelta(days=1) if tf == "D" else pd.Timedelta(days=5)   # weekly bar counts as closed from Saturday 00:00
+    span = pd.Timedelta(days=1) if tf == "D" else pd.Timedelta(days=7 if name in CRYPTO else 5)   # weekly bar closed from Saturday 00:00 (crypto: next Monday)
     closed = (idx + span) <= pd.Timestamp.now(tz="UTC")
     return bars[closed]
 
