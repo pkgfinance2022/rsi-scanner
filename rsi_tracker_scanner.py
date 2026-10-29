@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-RSI Setup Tracker scanner (4H only) -> Telegram.
+RSI Setup Tracker scanner (4H, Daily, Weekly) -> Telegram.
 
 Python port of the TradingView long/short trackers (B+D, S, E / S+D, R, E).
-Data: Yahoo Finance 1h bars, rebuilt into 4H bars. Only CLOSED 4H bars are evaluated.
+Data: Yahoo Finance. 4H bars are rebuilt from 1h data; Daily and Weekly use Yahoo daily/weekly bars.
+Only CLOSED bars are evaluated.
 
 Setup (once):   py -m pip install yfinance pandas numpy
 Telegram creds: environment variables TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID (never hardcode them here).
@@ -77,7 +78,9 @@ SEND_EVENTS = {"B+D", "S", "E"}      # per side; add "WATCH" to also send those
 LINE_ALERTS = True                   # green/red line: when it starts (B, B2), when it breaks (FAIL), when EMA200 is reached (TARGET)
 if LINE_ALERTS:
     SEND_EVENTS |= {"B", "B2", "FAIL", "TARGET"}
-LOOKBACK_BARS = 4                    # alert on events from the last N closed 4H bars (dedupe prevents repeats)
+TIMEFRAMES = ["4H", "D", "W"]
+LOOKBACK = {"4H": 4, "D": 3, "W": 2}   # closed bars to look back each run (dedupe prevents repeats)
+DEMO_EVENTS = {"B+D", "S", "E"}
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scanner_state.json")
 
 
@@ -257,6 +260,24 @@ def load_4h(symbol, name):
     return bars[closed]
 
 
+def load_bars(symbol, name, tf):
+    if tf == "4H":
+        return load_4h(symbol, name)
+    interval, period = ("1d", "10y") if tf == "D" else ("1wk", "max")
+    raw = yf.Ticker(symbol).history(period=period, interval=interval, auto_adjust=False)
+    if raw is None or raw.empty:
+        return None
+    bars = raw[["Open", "High", "Low", "Close"]].dropna().copy()
+    idx = pd.DatetimeIndex(bars.index)
+    if idx.tz is None:
+        idx = idx.tz_localize("UTC")
+    bars.index = idx
+    bars["start"] = idx
+    span = pd.Timedelta(days=1) if tf == "D" else pd.Timedelta(days=5)   # weekly bar counts as closed from Saturday 00:00
+    closed = (idx + span) <= pd.Timestamp.now(tz="UTC")
+    return bars[closed]
+
+
 # ---------------------------------------------------------------- telegram + state
 def send_telegram(text):
     token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
@@ -285,7 +306,7 @@ def fmt(v):
     return f"{v:.6g}"
 
 
-def message(name, side, ev, level, bar_time):
+def message(name, tf, side, ev, level, bar_time):
     long_ = side == "long"
     lv = fmt(level) if level == level else ""      # level == level is False for NaN
     if long_:
@@ -312,7 +333,8 @@ def message(name, side, ev, level, bar_time):
             "FAIL": f"Resistance line {lv} BROKEN (close above it): setup failed",
             "TARGET": f"Price reached EMA200 ({lv}): drop target hit, resistance line ends",
         }[ev]
-    return f"{dot} {name} 4H | {text}. (bar {bar_time:%Y-%m-%d %H:%M} UTC)"
+    when = f"{bar_time:%Y-%m-%d %H:%M} UTC" if tf == "4H" else f"{bar_time:%Y-%m-%d}"
+    return f"{dot} {name} {tf} | {text}. (bar {when})"
 
 
 # ---------------------------------------------------------------- main
@@ -320,17 +342,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="print messages, do not send, do not save state")
     ap.add_argument("--only", help="comma separated names, e.g. EURUSD,SPX")
-    ap.add_argument("--lookback", type=int, default=LOOKBACK_BARS)
+    ap.add_argument("--tf", default=",".join(TIMEFRAMES), help="timeframes to scan, e.g. 4H,D,W")
+    ap.add_argument("--lookback", type=int, default=None, help="override closed bars to look back")
     ap.add_argument("--demo", action="store_true", help="send the most recent PAST signal of each kind, labelled DEMO")
     ap.add_argument("--test-telegram", action="store_true", help="send one test message and exit")
     args = ap.parse_args()
 
     if args.test_telegram:
-        send_telegram("✅ RSI 4H scanner connected. Test message from rsi_tracker_scanner.py")
+        send_telegram("✅ RSI scanner (4H, D, W) connected. Test message from rsi_tracker_scanner.py")
         print("test message sent")
         return
 
     names = [n.strip() for n in args.only.split(",")] if args.only else list(TICKERS_CFG)
+    tfs = [t.strip().upper() for t in args.tf.split(",")]
     state = load_state()
     sent = 0
     loaded = 0
@@ -340,47 +364,52 @@ def main():
         if not sym:
             print(f"unknown ticker {name}")
             continue
-        try:
-            bars = load_4h(sym, name)
-            if bars is None or len(bars) < 260:
-                print(f"{name}: not enough data ({0 if bars is None else len(bars)} bars)")
-                continue
-            loaded += 1
-            d = indicators(bars)
-            times = pd.DatetimeIndex(bars["start"]).tz_convert("UTC")
-            last = len(bars) - 1
-            for side, dd in (("long", d), ("short", mirror(d))):
-                for i, ev, level in track(dd):
-                    if ev not in SEND_EVENTS:
-                        continue
-                    lvl = level if side == "long" else -level
-                    if args.demo:
-                        demo.append((times[i], name, side, ev, lvl))
-                        continue
-                    if i < last - args.lookback + 1:
-                        continue
-                    key = f"{name}|{side}|{ev}"
-                    bar_iso = times[i].isoformat()
-                    if state.get(key) == bar_iso:
-                        continue
-                    msg = message(name, side, ev, lvl, times[i])
-                    print(msg)
-                    if not args.dry_run:
-                        send_telegram(msg)
-                        state[key] = bar_iso
-                        sent += 1
-        except SystemExit:
-            raise
-        except Exception as e:
-            print(f"{name}: error {type(e).__name__}: {e}")
+        for tf in tfs:
+            try:
+                bars = load_bars(sym, name, tf)
+                if bars is None or len(bars) < 260:
+                    print(f"{name} {tf}: not enough data ({0 if bars is None else len(bars)} bars)")
+                    continue
+                loaded += 1
+                d = indicators(bars)
+                times = pd.DatetimeIndex(bars["start"]).tz_convert("UTC")
+                last = len(bars) - 1
+                lookback = args.lookback or LOOKBACK[tf]
+                for side, dd in (("long", d), ("short", mirror(d))):
+                    for i, ev, level in track(dd):
+                        if ev not in SEND_EVENTS:
+                            continue
+                        lvl = level if side == "long" else -level
+                        if args.demo:
+                            if ev in DEMO_EVENTS:
+                                demo.append((times[i], name, tf, side, ev, lvl))
+                            continue
+                        if i < last - lookback + 1:
+                            continue
+                        # 4H keeps its original key format so earlier alerts are not repeated
+                        key = f"{name}|{side}|{ev}" if tf == "4H" else f"{name}|{tf}|{side}|{ev}"
+                        bar_iso = times[i].isoformat()
+                        if state.get(key) == bar_iso:
+                            continue
+                        msg = message(name, tf, side, ev, lvl, times[i])
+                        print(msg)
+                        if not args.dry_run:
+                            send_telegram(msg)
+                            state[key] = bar_iso
+                            sent += 1
+            except SystemExit:
+                raise
+            except Exception as e:
+                print(f"{name} {tf}: error {type(e).__name__}: {e}")
     if args.demo:
-        # most recent past signal of each kind (per side), labelled DEMO; does not touch the saved state
+        # most recent past signal of each kind per timeframe and side, labelled DEMO; does not touch the saved state
         latest = {}
-        for t, name, side, ev, lvl in demo:
-            if (side, ev) not in latest or t > latest[(side, ev)][0]:
-                latest[(side, ev)] = (t, name, side, ev, lvl)
-        for t, name, side, ev, lvl in sorted(latest.values(), key=lambda x: x[0]):
-            msg = "🧪 DEMO (past signal, not live) " + message(name, side, ev, lvl, t)
+        for t, name, tf, side, ev, lvl in demo:
+            k = (tf, side, ev)
+            if k not in latest or t > latest[k][0]:
+                latest[k] = (t, name, tf, side, ev, lvl)
+        for t, name, tf, side, ev, lvl in sorted(latest.values(), key=lambda x: (x[2], x[0])):
+            msg = "🧪 DEMO (past signal, not live) " + message(name, tf, side, ev, lvl, t)
             print(msg)
             if not args.dry_run:
                 send_telegram(msg)
@@ -388,7 +417,8 @@ def main():
         return
     if not args.dry_run:
         save_state(state)
-    print(f"done, {sent} message(s) sent, {loaded}/{len(names)} tickers loaded" if not args.dry_run else "dry run done")
+    total = len(names) * len(tfs)
+    print(f"done, {sent} message(s) sent, {loaded}/{total} ticker-timeframes loaded" if not args.dry_run else "dry run done")
     if loaded == 0:
         raise SystemExit("No ticker data could be loaded (Yahoo may be blocking this machine).")
 
