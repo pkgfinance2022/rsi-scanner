@@ -59,6 +59,14 @@ TICKERS_CFG = {
 
     "AUS200": "^AXJO",
     "CHINA50": "FXI",
+
+    # US shares (Yahoo symbols)
+    "NFLX": "NFLX", "META": "META", "DIS": "DIS", "BKNG": "BKNG", "AAPL": "AAPL",
+    "GOOGL": "GOOGL", "HD": "HD", "ORCL": "ORCL", "KO": "KO", "MCO": "MCO",
+    "TMUS": "TMUS", "WMT": "WMT", "AMZN": "AMZN", "LLY": "LLY", "CAT": "CAT",
+    "MCD": "MCD", "ASML": "ASML", "TSM": "TSM", "SNDK": "SNDK", "MSFT": "MSFT",
+    "IDXX": "IDXX", "CDNS": "CDNS", "FTNT": "FTNT", "GD": "GD", "AVGO": "AVGO",
+    "NVDA": "NVDA", "PANW": "PANW", "TSLA": "TSLA", "BX": "BX", "MSTR": "MSTR",
 }
 
 # Round-the-clock markets: 4H bars anchored to a fixed UTC hour. Everything else: anchored to each day's session open.
