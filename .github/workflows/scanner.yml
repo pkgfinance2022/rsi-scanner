@@ -15,6 +15,9 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: write   # lets the run save alert_log.csv back to the repo
+
 concurrency:
   group: scanner
   cancel-in-progress: false   # runs queue one after another so alerts are never duplicated
@@ -54,3 +57,17 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: Save alert log
+        if: ${{ github.event.inputs.test != 'true' && github.event.inputs.demo != 'true' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ -f alert_log.csv ]; then git add alert_log.csv; fi
+          if git diff --cached --quiet; then
+            echo "No new alerts to log"
+          else
+            git commit -m "Update alert log [skip ci]"
+            git pull --rebase -q
+            git push
+          fi

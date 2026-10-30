@@ -2,9 +2,13 @@
 """
 RSI Setup Tracker scanner (4H, Daily, Weekly) -> Telegram.
 
-Python port of the TradingView long/short trackers (B+D, S, E / S+D, R, E).
+Python port of the TradingView long/short trackers (B+D, S, E / S+D, R, E, plus green/red line alerts).
 Data: Yahoo Finance. 4H bars are rebuilt from 1h data; Daily and Weekly use Yahoo daily/weekly bars.
 Only CLOSED bars are evaluated.
+
+Each alert carries: risk to the line, distance to EMA200 (and reward/risk), a 0-5 quality score,
+and the status of the same side on the other timeframes (multi-timeframe agreement).
+A daily summary of all active lines is sent once a day, and every alert is appended to alert_log.csv.
 
 Setup (once):   py -m pip install yfinance pandas numpy
 Telegram creds: environment variables TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID (never hardcode them here).
@@ -12,12 +16,13 @@ Test run:       py rsi_tracker_scanner.py --dry-run
 Real run:       py rsi_tracker_scanner.py          (schedule it hourly; duplicates are suppressed)
 """
 import argparse
+import csv
 import json
 import os
 import sys
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -84,7 +89,7 @@ FX_ANCHOR_HOUR_UTC = 1   # 4H bars open 01,05,09,13,17,21 UTC. CHECK against you
 # ---------------------------------------------------------------- parameters (same defaults as the Pine scripts)
 P = dict(
     rsi_len=28, ma_len=14, fast=20, slow=200, mid=60, atr_len=14,
-    os=30.0, lvl1=45.0, ext=20.0, ext_window=60,
+    os=30.0, lvl1=45.0, lvl2=50.0, ext=20.0, ext_window=60, sustain=2,
     need_ma=True, need_ema20=True,
     watch_bars=24, fail_expiry=80, max_attempts=2, break_on_close=True,
     arm_bars=120, sup_tol_mult=0.3, sup_bull=True, keep_on_fail=True, only_bd=True,
@@ -96,7 +101,11 @@ if LINE_ALERTS:
 TIMEFRAMES = ["4H", "D", "W"]
 LOOKBACK = {"4H": 4, "D": 3, "W": 2}   # closed bars to look back each run (dedupe prevents repeats)
 DEMO_EVENTS = {"B+D", "S", "E"}
-STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scanner_state.json")
+DIGEST_HOUR_UTC = 6                  # daily "what's active" summary is sent by the first run at/after this UTC hour
+HERE = os.path.dirname(os.path.abspath(__file__))
+STATE_FILE = os.path.join(HERE, "scanner_state.json")
+LOG_FILE = os.environ.get("ALERT_LOG", os.path.join(HERE, "alert_log.csv"))
+STATUS = {0: "-", 1: "WATCH", 2: "ACTIVE", 3: "RETRY"}
 
 
 # ---------------------------------------------------------------- indicators
@@ -136,6 +145,7 @@ def mirror(d):
 
 # ---------------------------------------------------------------- tracker (port of the Pine state machine)
 def track(d):
+    """Returns (events, final). events: (bar_index, name, level, info). final: state at the last bar."""
     n = len(d["c"])
     state = 0
     attempt = 0
@@ -150,7 +160,23 @@ def track(d):
     ext_armed = False
     ext_bar = 0
     prev_cond = False
-    events = []   # (bar_index, name, protected_level)
+    events = []
+
+    def info_at(i):
+        """Risk, EMA200 room and the 0-5 quality score (same checklist as the Pine line colour)."""
+        c = d["c"][i]
+        risk = c - cur_low
+        room = d["emas"][i] - c
+        k = P["sustain"]
+        sustained = i >= k - 1 and bool(np.min(d["c"][i - k + 1:i + 1] - d["emaf"][i - k + 1:i + 1]) > 0)
+        score = (int(divergence) + int(cur_rsi_low <= P["os"] - 5) + int(sustained)
+                 + int(d["rsi"][i] >= P["lvl2"]) + int(risk > 0 and room >= 2 * risk))
+        return dict(
+            price=float(c), score=score,
+            risk_pct=float(risk / abs(c) * 100) if risk > 0 else np.nan,
+            room_pct=float(room / abs(c) * 100),
+            rr=float(room / risk) if risk > 0 else np.nan,
+        )
 
     for i in range(n):
         o, h, l, c = d["o"][i], d["h"][i], d["l"][i], d["c"][i]
@@ -182,7 +208,7 @@ def track(d):
         elif st == 2:
             brk = (c < cur_low) if P["break_on_close"] else (l < cur_low)
             if brk:
-                events.append((i, "FAIL", cur_low))
+                events.append((i, "FAIL", cur_low, None))
                 state = 0 if attempt >= P["max_attempts"] else 3
                 attempt += 1
                 prev_low, prev_rsi_low = cur_low, cur_rsi_low
@@ -190,7 +216,7 @@ def track(d):
                 break_bar = i
             else:
                 if h >= emas:
-                    events.append((i, "TARGET", emas))
+                    events.append((i, "TARGET", emas, None))
                     state = 0
                 elif i - buy_bar > 150:
                     state = 0
@@ -227,19 +253,22 @@ def track(d):
             ext_armed = False
 
         if new_watch:
-            events.append((i, "WATCH", cur_low))
+            events.append((i, "WATCH", cur_low, None))
         if new_buy:
             if attempt >= 2 and divergence:
-                events.append((i, "B+D", cur_low))
+                events.append((i, "B+D", cur_low, info_at(i)))
             elif attempt >= 2:
-                events.append((i, "B2", cur_low))
+                events.append((i, "B2", cur_low, info_at(i)))
             else:
-                events.append((i, "B", cur_low))
+                events.append((i, "B", cur_low, info_at(i)))
         if s2_now:
-            events.append((i, "S", np.nan))
+            events.append((i, "S", np.nan, None))
         if ready:
-            events.append((i, "E", np.nan))
-    return events
+            events.append((i, "E", np.nan, None))
+
+    final = dict(state=state, level=cur_low, attempt=attempt, divergence=divergence,
+                 info=info_at(n - 1) if (state == 2 and n) else None)
+    return events, final
 
 
 # ---------------------------------------------------------------- data
@@ -293,7 +322,7 @@ def load_bars(symbol, name, tf):
     return bars[closed]
 
 
-# ---------------------------------------------------------------- telegram + state
+# ---------------------------------------------------------------- telegram, state, log
 def send_telegram(text):
     token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
     if not token or not chat:
@@ -317,11 +346,37 @@ def save_state(s):
         json.dump(s, f, indent=1)
 
 
+LOG_FIELDS = ["sent_utc", "ticker", "timeframe", "side", "event", "bar_time_utc", "price", "line_level",
+              "risk_pct", "ema200_room_pct", "reward_risk", "score", "same_side_status"]
+
+
+def append_log(row):
+    try:
+        new = not os.path.exists(LOG_FILE)
+        with open(LOG_FILE, "a", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=LOG_FIELDS)
+            if new:
+                w.writeheader()
+            w.writerow(row)
+    except Exception as e:
+        print(f"(could not write alert log: {e})")
+
+
 def fmt(v):
     return f"{v:.6g}"
 
 
-def message(name, tf, side, ev, level, bar_time):
+def ok(v):
+    return v is not None and v == v      # not None and not NaN
+
+
+def mtf_text(status):
+    inplay = sum(1 for v in status.values() if v in ("WATCH", "ACTIVE"))
+    parts = " · ".join(f"{tf} {status[tf]}" for tf in TIMEFRAMES if tf in status)
+    return f"Same side: {parts} ({inplay}/{len(status)} in play)"
+
+
+def message(name, tf, side, ev, level, bar_time, info=None, mtf=None):
     long_ = side == "long"
     lv = fmt(level) if level == level else ""      # level == level is False for NaN
     if long_:
@@ -349,17 +404,73 @@ def message(name, tf, side, ev, level, bar_time):
             "TARGET": f"Price reached EMA200 ({lv}): drop target hit, resistance line ends",
         }[ev]
     when = f"{bar_time:%Y-%m-%d %H:%M} UTC" if tf == "4H" else f"{bar_time:%Y-%m-%d}"
-    return f"{dot} {name} {tf} | {text}. (bar {when})"
+    out = f"{dot} {name} {tf} | {text}. (bar {when})"
+    extras = []
+    if info and ev in ("B", "B2", "B+D"):
+        bits = []
+        if ok(info["risk_pct"]):
+            bits.append(f"Risk to line {info['risk_pct']:.1f}%")
+        if info["room_pct"] > 0:
+            room = f"EMA200 {info['room_pct']:.1f}% away"
+            if ok(info["rr"]):
+                room += f" ({info['rr']:.1f}R)"
+            bits.append(room)
+        else:
+            bits.append("price already beyond EMA200")
+        bits.append(f"Score {info['score']}/5")
+        extras.append(" | ".join(bits))
+    if mtf and ev in ("B", "B2", "B+D", "S", "E"):
+        extras.append(mtf_text(mtf))
+    return out + ("\n" + "\n".join(extras) if extras else "")
+
+
+def build_digest(active, watching, today):
+    order = {tf: k for k, tf in enumerate(TIMEFRAMES)}
+    lines = [f"📋 Daily summary {today:%Y-%m-%d} (UTC)"]
+    for side, title, dot in (("long", "Support lines active", "🟢"), ("short", "Resistance lines active", "🔴")):
+        rows = [a for a in active if a["side"] == side]
+        rows.sort(key=lambda a: (-(a["info"]["score"] if a["info"] else 0), order[a["tf"]], a["name"]))
+        lines.append(f"\n{dot} {title} ({len(rows)}):")
+        if not rows:
+            lines.append("none")
+        for a in rows:
+            row = f"{a['name']} {a['tf']} line {fmt(a['level'])}"
+            inf = a["info"]
+            if inf:
+                if ok(inf["risk_pct"]):
+                    row += f" · risk {inf['risk_pct']:.1f}%"
+                row += f" · EMA200 {inf['room_pct']:.1f}% away" if inf["room_pct"] > 0 else " · beyond EMA200"
+                row += f" · score {inf['score']}/5"
+            lines.append(row)
+    lines.append(f"\n👀 Watching (RSI stretched, no signal yet): {watching['long']} oversold, {watching['short']} overbought")
+    return "\n".join(lines)
+
+
+def send_chunked(text, dry_run):
+    chunk = ""
+    pieces = []
+    for line in text.split("\n"):
+        if len(chunk) + len(line) + 1 > 3800:
+            pieces.append(chunk)
+            chunk = ""
+        chunk += line + "\n"
+    if chunk.strip():
+        pieces.append(chunk)
+    for p in pieces:
+        print(p.rstrip())
+        if not dry_run:
+            send_telegram(p.rstrip())
 
 
 # ---------------------------------------------------------------- main
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dry-run", action="store_true", help="print messages, do not send, do not save state")
+    ap.add_argument("--dry-run", action="store_true", help="print messages, do not send, do not save state or log")
     ap.add_argument("--only", help="comma separated names, e.g. EURUSD,SPX")
     ap.add_argument("--tf", default=",".join(TIMEFRAMES), help="timeframes to scan, e.g. 4H,D,W")
     ap.add_argument("--lookback", type=int, default=None, help="override closed bars to look back")
     ap.add_argument("--demo", action="store_true", help="send the most recent PAST signal of each kind, labelled DEMO")
+    ap.add_argument("--digest", action="store_true", help="send (or with --dry-run print) the daily summary now")
     ap.add_argument("--test-telegram", action="store_true", help="send one test message and exit")
     args = ap.parse_args()
 
@@ -374,11 +485,14 @@ def main():
     sent = 0
     loaded = 0
     demo = []
+    active = []
+    watching = {"long": 0, "short": 0}
     for name in names:
         sym = TICKERS_CFG.get(name)
         if not sym:
             print(f"unknown ticker {name}")
             continue
+        res = {}
         for tf in tfs:
             try:
                 bars = load_bars(sym, name, tf)
@@ -388,48 +502,80 @@ def main():
                 loaded += 1
                 d = indicators(bars)
                 times = pd.DatetimeIndex(bars["start"]).tz_convert("UTC")
-                last = len(bars) - 1
-                lookback = args.lookback or LOOKBACK[tf]
+                res[tf] = dict(times=times, last=len(bars) - 1, sides={})
                 for side, dd in (("long", d), ("short", mirror(d))):
-                    for i, ev, level in track(dd):
-                        if ev not in SEND_EVENTS:
-                            continue
-                        lvl = level if side == "long" else -level
-                        if args.demo:
-                            if ev in DEMO_EVENTS:
-                                demo.append((times[i], name, tf, side, ev, lvl))
-                            continue
-                        if i < last - lookback + 1:
-                            continue
-                        # 4H keeps its original key format so earlier alerts are not repeated
-                        key = f"{name}|{side}|{ev}" if tf == "4H" else f"{name}|{tf}|{side}|{ev}"
-                        bar_iso = times[i].isoformat()
-                        if state.get(key) == bar_iso:
-                            continue
-                        msg = message(name, tf, side, ev, lvl, times[i])
-                        print(msg)
-                        if not args.dry_run:
-                            send_telegram(msg)
-                            state[key] = bar_iso
-                            sent += 1
+                    res[tf]["sides"][side] = track(dd)
             except SystemExit:
                 raise
             except Exception as e:
                 print(f"{name} {tf}: error {type(e).__name__}: {e}")
+
+        for side in ("long", "short"):
+            status = {tf: STATUS[res[tf]["sides"][side][1]["state"]] for tf in res}
+            for tf in res:
+                final = res[tf]["sides"][side][1]
+                sign = 1 if side == "long" else -1
+                if final["state"] == 2:
+                    active.append(dict(name=name, tf=tf, side=side, level=sign * final["level"], info=final["info"]))
+                elif final["state"] == 1:
+                    watching[side] += 1
+                times, last = res[tf]["times"], res[tf]["last"]
+                lookback = args.lookback or LOOKBACK[tf]
+                for i, ev, level, info in res[tf]["sides"][side][0]:
+                    if ev not in SEND_EVENTS:
+                        continue
+                    lvl = sign * level
+                    if args.demo:
+                        if ev in DEMO_EVENTS:
+                            demo.append((times[i], name, tf, side, ev, lvl, info))
+                        continue
+                    if i < last - lookback + 1:
+                        continue
+                    # 4H keeps its original key format so earlier alerts are not repeated
+                    key = f"{name}|{side}|{ev}" if tf == "4H" else f"{name}|{tf}|{side}|{ev}"
+                    bar_iso = times[i].isoformat()
+                    if state.get(key) == bar_iso:
+                        continue
+                    msg = message(name, tf, side, ev, lvl, times[i], info, status)
+                    print(msg)
+                    if not args.dry_run:
+                        send_telegram(msg)
+                        state[key] = bar_iso
+                        sent += 1
+                        append_log(dict(
+                            sent_utc=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"), ticker=name,
+                            timeframe=tf, side=side, event=ev, bar_time_utc=times[i].isoformat(),
+                            price=fmt(info["price"] * sign) if info else "", line_level=fmt(lvl) if lvl == lvl else "",
+                            risk_pct=f"{info['risk_pct']:.2f}" if info and ok(info["risk_pct"]) else "",
+                            ema200_room_pct=f"{info['room_pct']:.2f}" if info else "",
+                            reward_risk=f"{info['rr']:.2f}" if info and ok(info["rr"]) else "",
+                            score=info["score"] if info else "",
+                            same_side_status=" ".join(f"{k}:{v}" for k, v in status.items())))
+
     if args.demo:
-        # most recent past signal of each kind per timeframe and side, labelled DEMO; does not touch the saved state
+        # most recent past signal of each kind per timeframe and side, labelled DEMO; does not touch state or log
         latest = {}
-        for t, name, tf, side, ev, lvl in demo:
+        for t, name, tf, side, ev, lvl, info in demo:
             k = (tf, side, ev)
             if k not in latest or t > latest[k][0]:
-                latest[k] = (t, name, tf, side, ev, lvl)
-        for t, name, tf, side, ev, lvl in sorted(latest.values(), key=lambda x: (x[2], x[0])):
-            msg = "🧪 DEMO (past signal, not live) " + message(name, tf, side, ev, lvl, t)
+                latest[k] = (t, name, tf, side, ev, lvl, info)
+        for t, name, tf, side, ev, lvl, info in sorted(latest.values(), key=lambda x: (x[2], x[0])):
+            msg = "🧪 DEMO (past signal, not live) " + message(name, tf, side, ev, lvl, t, info)
             print(msg)
             if not args.dry_run:
                 send_telegram(msg)
         print(f"demo done, {len(latest)} message(s)")
         return
+
+    # daily summary of everything currently active
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    due = (not args.only) and now.hour >= DIGEST_HOUR_UTC and state.get("_digest_date") != today
+    if loaded and (args.digest or due):
+        send_chunked(build_digest(active, watching, now), args.dry_run)
+        if not args.dry_run:
+            state["_digest_date"] = today
+
     if not args.dry_run:
         save_state(state)
     total = len(names) * len(tfs)
