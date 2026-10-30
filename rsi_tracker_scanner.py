@@ -174,7 +174,7 @@ def track(d):
         score = (int(divergence) + int(cur_rsi_low <= P["os"] - 5) + int(sustained)
                  + int(d["rsi"][i] >= P["lvl2"]) + int(risk > 0 and room >= 2 * risk))
         return dict(
-            price=float(c), score=score,
+            price=float(c), score=score, rsi_low=float(cur_rsi_low), ema200=float(d["emas"][i]),
             risk_pct=float(risk / abs(c) * 100) if risk > 0 else np.nan,
             room_pct=float(room / abs(c) * 100),
             rr=float(room / risk) if risk > 0 else np.nan,
@@ -424,6 +424,10 @@ def message(name, tf, side, ev, level, bar_time, info=None, mtf=None):
             bits.append("price already beyond EMA200")
         bits.append(f"Score {info['score']}/5")
         extras.append(" | ".join(bits))
+        tgt = fmt(info["ema200"] if long_ else -info["ema200"])
+        what = "Support" if long_ else "Resistance"
+        extras.append(f"Plan: {'buy' if long_ else 'sell'} now, trail to EMA200 ≈ {tgt}; "
+                      f"setup fails if a bar closes {'below' if long_ else 'above'} the {what.lower()} line {lv}")
     if mtf and ev in ("B", "B2", "B+D", "S", "E"):
         extras.append(mtf_text(mtf))
     return out + ("\n" + "\n".join(extras) if extras else "")
