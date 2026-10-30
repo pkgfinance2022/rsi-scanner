@@ -17,6 +17,7 @@ Real run:       py rsi_tracker_scanner.py          (schedule it hourly; duplicat
 """
 import argparse
 import csv
+import html
 import json
 import os
 import sys
@@ -106,6 +107,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(HERE, "scanner_state.json")
 LOG_FILE = os.environ.get("ALERT_LOG", os.path.join(HERE, "alert_log.csv"))
 STATUS = {0: "-", 1: "WATCH", 2: "ACTIVE", 3: "RETRY"}
+DIGEST_ALIAS = {"RUSSELL2000": "RUSSELL2K"}   # keeps the daily-summary table narrow on a phone
 
 
 # ---------------------------------------------------------------- indicators
@@ -323,12 +325,15 @@ def load_bars(symbol, name, tf):
 
 
 # ---------------------------------------------------------------- telegram, state, log
-def send_telegram(text):
+def send_telegram(text, as_html=False):
     token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
     if not token or not chat:
         raise SystemExit("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID environment variables (or use --dry-run).")
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = urllib.parse.urlencode({"chat_id": chat, "text": text}).encode()
+    fields = {"chat_id": chat, "text": text}
+    if as_html:
+        fields["parse_mode"] = "HTML"
+    data = urllib.parse.urlencode(fields).encode()
     with urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=20) as r:
         r.read()
 
@@ -424,42 +429,37 @@ def message(name, tf, side, ev, level, bar_time, info=None, mtf=None):
     return out + ("\n" + "\n".join(extras) if extras else "")
 
 
+def digest_table(rows):
+    """Fixed-width table that fits a phone screen (about 38 characters per row)."""
+    out = [f"{'Ticker':<10}{'TF':<3}{'Line':>9}{'Risk%':>6}{'EMA%':>6}{'Sc':>3}"]
+    for a in rows:
+        inf = a["info"]
+        risk = f"{inf['risk_pct']:.1f}" if inf and ok(inf["risk_pct"]) else "-"
+        room = f"{inf['room_pct']:.1f}" if inf and inf["room_pct"] > 0 else ("pass" if inf else "-")
+        score = str(inf["score"]) if inf else "-"
+        out.append(f"{DIGEST_ALIAS.get(a['name'], a['name']):<10}{a['tf']:<3}{fmt(a['level']):>9}{risk:>6}{room:>6}{score:>3}")
+    return "<pre>" + html.escape("\n".join(out)) + "</pre>"
+
+
 def build_digest(active, watching, today):
+    """Returns a list of HTML messages (one per section, so none gets too long)."""
     order = {tf: k for k, tf in enumerate(TIMEFRAMES)}
-    lines = [f"📋 Daily summary {today:%Y-%m-%d} (UTC)"]
+    legend = "<i>Risk% = distance to the line, EMA% = distance to EMA200 (pass = already beyond), Sc = score out of 5</i>"
+    msgs = [f"📋 <b>Daily summary {today:%Y-%m-%d}</b> (UTC)\n{legend}"]
     for side, title, dot in (("long", "Support lines active", "🟢"), ("short", "Resistance lines active", "🔴")):
         rows = [a for a in active if a["side"] == side]
         rows.sort(key=lambda a: (-(a["info"]["score"] if a["info"] else 0), order[a["tf"]], a["name"]))
-        lines.append(f"\n{dot} {title} ({len(rows)}):")
-        if not rows:
-            lines.append("none")
-        for a in rows:
-            row = f"{a['name']} {a['tf']} line {fmt(a['level'])}"
-            inf = a["info"]
-            if inf:
-                if ok(inf["risk_pct"]):
-                    row += f" · risk {inf['risk_pct']:.1f}%"
-                row += f" · EMA200 {inf['room_pct']:.1f}% away" if inf["room_pct"] > 0 else " · beyond EMA200"
-                row += f" · score {inf['score']}/5"
-            lines.append(row)
-    lines.append(f"\n👀 Watching (RSI stretched, no signal yet): {watching['long']} oversold, {watching['short']} overbought")
-    return "\n".join(lines)
+        body = digest_table(rows) if rows else "none"
+        msgs.append(f"{dot} <b>{title} ({len(rows)})</b>\n{body}")
+    msgs.append(f"👀 <b>Watching</b> (RSI stretched, no signal yet): {watching['long']} oversold · {watching['short']} overbought")
+    return msgs
 
 
-def send_chunked(text, dry_run):
-    chunk = ""
-    pieces = []
-    for line in text.split("\n"):
-        if len(chunk) + len(line) + 1 > 3800:
-            pieces.append(chunk)
-            chunk = ""
-        chunk += line + "\n"
-    if chunk.strip():
-        pieces.append(chunk)
-    for p in pieces:
-        print(p.rstrip())
+def send_digest(msgs, dry_run):
+    for m in msgs:
+        print(m)
         if not dry_run:
-            send_telegram(p.rstrip())
+            send_telegram(m, as_html=True)
 
 
 # ---------------------------------------------------------------- main
@@ -572,7 +572,7 @@ def main():
     today = now.strftime("%Y-%m-%d")
     due = (not args.only) and now.hour >= DIGEST_HOUR_UTC and state.get("_digest_date") != today
     if loaded and (args.digest or due):
-        send_chunked(build_digest(active, watching, now), args.dry_run)
+        send_digest(build_digest(active, watching, now), args.dry_run)
         if not args.dry_run:
             state["_digest_date"] = today
 
