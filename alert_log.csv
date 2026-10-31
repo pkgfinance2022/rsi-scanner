@@ -1,0 +1,2 @@
+sent_utc,ticker,timeframe,side,event,bar_time_utc,price,line_level,risk_pct,ema200_room_pct,reward_risk,score,same_side_status
+2026-10-31 02:03,NIFTY50,D,long,B,2026-10-29T18:30:00+00:00,23053.1,22179.9,3.79,3.72,0.98,1,4H:ACTIVE D:ACTIVE W:-
