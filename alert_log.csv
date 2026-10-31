@@ -1,2 +1,6 @@
 sent_utc,ticker,timeframe,side,event,bar_time_utc,price,line_level,risk_pct,ema200_room_pct,reward_risk,score,same_side_status
 2026-10-31 02:03,NIFTY50,D,long,B,2026-10-29T18:30:00+00:00,23053.1,22179.9,3.79,3.72,0.98,1,4H:ACTIVE D:ACTIVE W:-
+2026-10-31 04:03,NAS100,D,short,TARGET,2026-10-30T04:00:00+00:00,,28153.1,,,,,4H:- D:- W:RETRY
+2026-10-31 04:03,HD,D,long,TARGET,2026-10-30T04:00:00+00:00,,331.27,,,,,4H:- D:- W:-
+2026-10-31 04:03,ASML,W,short,B,2026-10-26T04:00:00+00:00,1565.9,1999.96,27.72,33.28,1.20,2,4H:- D:- W:ACTIVE
+2026-10-31 04:04,FTNT,D,short,S,2026-10-30T04:00:00+00:00,,,,,,,4H:- D:- W:WATCH
