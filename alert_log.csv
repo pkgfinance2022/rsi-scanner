@@ -5,3 +5,4 @@ sent_utc,ticker,timeframe,side,event,bar_time_utc,price,line_level,risk_pct,ema2
 2026-10-31 04:03,ASML,W,short,B,2026-10-26T04:00:00+00:00,1565.9,1999.96,27.72,33.28,1.20,2,4H:- D:- W:ACTIVE
 2026-10-31 04:04,FTNT,D,short,S,2026-10-30T04:00:00+00:00,,,,,,,4H:- D:- W:WATCH
 2026-10-31 08:04,BTCUSD,D,short,TARGET,2026-10-30T00:00:00+00:00,,76416.1,,,,,4H:- D:- W:-
+2026-11-02 18:52,KO,4H,short,FAIL,2026-11-02T14:30:00+00:00,,95.37,,,,,4H:RETRY D:- W:RETRY
