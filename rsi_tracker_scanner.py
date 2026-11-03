@@ -101,7 +101,8 @@ if LINE_ALERTS:
     SEND_EVENTS |= {"B", "B2", "FAIL", "TARGET"}
 TIMEFRAMES = ["4H", "D", "W"]
 LOOKBACK = {"4H": 4, "D": 3, "W": 2, "5M": 3}   # closed bars to look back each run (dedupe prevents repeats)
-FAST_TICKERS = ["BTCUSD", "ETHUSD", "XAUUSD", "SILVER"]   # --fast mode: 5-minute E alerts for these only
+FAST_TICKERS = ["BTCUSD", "ETHUSD", "XAUUSD", "SILVER", "NAS100"]   # --fast mode: 5-minute E alerts for these only
+FAST_SYMBOL = {"NAS100": "NQ=F"}   # 5-minute data from the near-24h futures instead of the US-hours-only cash index
 FAST_EVENTS = {"E"}
 DEMO_EVENTS = {"B+D", "S", "E"}
 DIGEST_HOUR_UTC = 6                  # daily "what's active" summary is sent by the first run at/after this UTC hour
@@ -326,7 +327,7 @@ def load_bars(symbol, name, tf):
     if tf == "4H":
         return load_4h(symbol, name)
     if tf == "5M":
-        return load_5m(symbol)
+        return load_5m(FAST_SYMBOL.get(name, symbol))
     interval, period = ("1d", "10y") if tf == "D" else ("1wk", "max")
     raw = yf.Ticker(symbol).history(period=period, interval=interval, auto_adjust=False)
     if raw is None or raw.empty:
