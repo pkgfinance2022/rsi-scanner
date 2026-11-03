@@ -1,0 +1,29 @@
+name: etoro-demo
+
+# Manual only. "check" is read-only. "test-order" places ONE tiny order on the eToro DEMO (virtual) account.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "check = read-only (leverage, minimum size, live spread); test-order = one tiny DEMO order"
+        type: choice
+        options: [check, test-order]
+        default: check
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: eToro demo
+        env:
+          ETORO_PUBLIC_KEY: ${{ secrets.ETORO_PUBLIC_KEY }}
+          ETORO_PRIVATE_KEY: ${{ secrets.ETORO_PRIVATE_KEY }}
+        run: python etoro_demo.py --${{ github.event.inputs.mode }}

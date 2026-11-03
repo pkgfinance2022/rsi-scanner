@@ -34,6 +34,9 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ETORO_PUBLIC_KEY: ${{ secrets.ETORO_PUBLIC_KEY }}
+          ETORO_PRIVATE_KEY: ${{ secrets.ETORO_PRIVATE_KEY }}
+          ETORO_DEMO_ORDERS: ${{ vars.ETORO_DEMO_ORDERS }}   # set the repo variable to 1 to place eToro DEMO orders
         run: python rsi_tracker_scanner.py --fast
       - name: Save paper trades
         run: |

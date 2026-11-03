@@ -749,6 +749,15 @@ def main():
                         send_telegram(msg)
                         state[key] = bar_iso
                         sent += 1
+                        if args.fast and ev == "E" and os.environ.get("ETORO_DEMO_ORDERS") == "1":
+                            rec = ledger.get(f"{name}|{side}|{times[i].isoformat()}")
+                            p = paper_plan(res[tf]["dd"][side], i)
+                            if rec is not None and p is not None and "demo" not in rec:
+                                import etoro_demo      # DEMO account only; see etoro_demo.py
+                                rec["demo"] = etoro_demo.place(
+                                    name, side, (p["entry"] - p["stop"]) / abs(p["entry"]),
+                                    (p["target"] - p["entry"]) / abs(p["entry"]), rec["id"])
+                                send_telegram(etoro_demo.describe(name, side, rec["demo"]))
                         append_log(dict(
                             sent_utc=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"), ticker=name,
                             timeframe=tf, side=side, event=ev, bar_time_utc=times[i].isoformat(),
