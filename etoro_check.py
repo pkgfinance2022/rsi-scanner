@@ -23,7 +23,8 @@ def get(path, params):
         raise SystemExit("ETORO_PUBLIC_KEY / ETORO_PRIVATE_KEY secrets are not set")
     req = urllib.request.Request(
         f"{BASE}{path}?{urllib.parse.urlencode(params)}",
-        headers={"x-api-key": key, "x-user-key": user, "x-request-id": str(uuid.uuid4()), "Accept": "application/json"})
+        headers={"x-api-key": key, "x-user-key": user, "x-request-id": str(uuid.uuid4()), "Accept": "application/json",
+                 "User-Agent": "rsi-scanner/1.0 (personal paper-trading tool)"})
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
             return json.load(r)
