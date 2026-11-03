@@ -100,7 +100,9 @@ LINE_ALERTS = True                   # green/red line: when it starts (B, B2), w
 if LINE_ALERTS:
     SEND_EVENTS |= {"B", "B2", "FAIL", "TARGET"}
 TIMEFRAMES = ["4H", "D", "W"]
-LOOKBACK = {"4H": 4, "D": 3, "W": 2}   # closed bars to look back each run (dedupe prevents repeats)
+LOOKBACK = {"4H": 4, "D": 3, "W": 2, "5M": 3}   # closed bars to look back each run (dedupe prevents repeats)
+FAST_TICKERS = ["BTCUSD", "ETHUSD", "XAUUSD", "SILVER"]   # --fast mode: 5-minute E alerts for these only
+FAST_EVENTS = {"E"}
 DEMO_EVENTS = {"B+D", "S", "E"}
 DIGEST_HOUR_UTC = 6                  # daily "what's active" summary is sent by the first run at/after this UTC hour
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -306,9 +308,25 @@ def load_4h(symbol, name):
     return bars[closed]
 
 
+def load_5m(symbol):
+    raw = yf.Ticker(symbol).history(period="30d", interval="5m", auto_adjust=False)
+    if raw is None or raw.empty:
+        return None
+    bars = raw[["Open", "High", "Low", "Close"]].dropna().copy()
+    idx = pd.DatetimeIndex(bars.index)
+    if idx.tz is None:
+        idx = idx.tz_localize("UTC")
+    idx = idx.tz_convert("UTC")
+    bars.index = idx
+    bars["start"] = idx
+    return bars[idx + pd.Timedelta(minutes=5) <= pd.Timestamp.now(tz="UTC")]   # drop the bar still forming
+
+
 def load_bars(symbol, name, tf):
     if tf == "4H":
         return load_4h(symbol, name)
+    if tf == "5M":
+        return load_5m(symbol)
     interval, period = ("1d", "10y") if tf == "D" else ("1wk", "max")
     raw = yf.Ticker(symbol).history(period=period, interval=interval, auto_adjust=False)
     if raw is None or raw.empty:
@@ -408,7 +426,7 @@ def message(name, tf, side, ev, level, bar_time, info=None, mtf=None):
             "FAIL": f"Resistance line {lv} BROKEN (close above it): setup failed",
             "TARGET": f"Price reached EMA200 ({lv}): drop target hit, resistance line ends",
         }[ev]
-    when = f"{bar_time:%Y-%m-%d %H:%M} UTC" if tf == "4H" else f"{bar_time:%Y-%m-%d}"
+    when = f"{bar_time:%Y-%m-%d %H:%M} UTC" if tf in ("4H", "5M") else f"{bar_time:%Y-%m-%d}"
     out = f"{dot} {name} {tf} | {text}. (bar {when})"
     extras = []
     if info and ev in ("B", "B2", "B+D"):
@@ -476,7 +494,10 @@ def main():
     ap.add_argument("--demo", action="store_true", help="send the most recent PAST signal of each kind, labelled DEMO")
     ap.add_argument("--digest", action="store_true", help="send (or with --dry-run print) the daily summary now")
     ap.add_argument("--test-telegram", action="store_true", help="send one test message and exit")
+    ap.add_argument("--fast", action="store_true", help="5-minute E alerts for BTCUSD, ETHUSD, XAUUSD, SILVER only")
     args = ap.parse_args()
+    if args.fast:
+        args.only, args.tf = ",".join(FAST_TICKERS), "5M"
 
     if args.test_telegram:
         send_telegram("✅ RSI scanner (4H, D, W) connected. Test message from rsi_tracker_scanner.py")
@@ -526,7 +547,7 @@ def main():
                 times, last = res[tf]["times"], res[tf]["last"]
                 lookback = args.lookback or LOOKBACK[tf]
                 for i, ev, level, info in res[tf]["sides"][side][0]:
-                    if ev not in SEND_EVENTS:
+                    if ev not in (FAST_EVENTS if args.fast else SEND_EVENTS):
                         continue
                     lvl = sign * level
                     if args.demo:
@@ -540,7 +561,7 @@ def main():
                     bar_iso = times[i].isoformat()
                     if state.get(key) == bar_iso:
                         continue
-                    msg = message(name, tf, side, ev, lvl, times[i], info, status)
+                    msg = message(name, tf, side, ev, lvl, times[i], info, None if args.fast else status)
                     print(msg)
                     if not args.dry_run:
                         send_telegram(msg)
@@ -574,7 +595,7 @@ def main():
     # daily summary of everything currently active
     now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
-    due = (not args.only) and now.hour >= DIGEST_HOUR_UTC and state.get("_digest_date") != today
+    due = (not args.only) and not args.fast and now.hour >= DIGEST_HOUR_UTC and state.get("_digest_date") != today
     if loaded and (args.digest or due):
         send_digest(build_digest(active, watching, now), args.dry_run)
         if not args.dry_run:

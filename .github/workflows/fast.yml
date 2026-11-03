@@ -1,0 +1,37 @@
+name: fast-5m-E
+
+# 5-minute E alerts for BTCUSD, ETHUSD, XAUUSD, SILVER.
+# No schedule on purpose: GitHub's own cron is too unreliable for 5 minutes.
+# Trigger it from cron-job.org every 5 minutes (same POST as the hourly one, but .../workflows/fast.yml/dispatches).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fast
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Restore alert state
+        uses: actions/cache@v4
+        with:
+          path: scanner_state.json
+          key: fast-state-${{ github.run_id }}
+          restore-keys: fast-state-
+      - name: Scan 5-minute E
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python rsi_tracker_scanner.py --fast
