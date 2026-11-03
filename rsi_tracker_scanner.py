@@ -464,7 +464,7 @@ def digest_table(rows):
     return "<pre>" + html.escape("\n".join(out)) + "</pre>"
 
 
-def build_digest(active, watching, today):
+def build_digest(active, watching, today, paper_line=None):
     """Returns a list of HTML messages (one per section, so none gets too long)."""
     order = {tf: k for k, tf in enumerate(TIMEFRAMES)}
     legend = "<i>Risk% = distance to the line, EMA% = distance to EMA200 (pass = already beyond), Sc = score out of 5</i>"
@@ -475,6 +475,8 @@ def build_digest(active, watching, today):
         body = digest_table(rows) if rows else "none"
         msgs.append(f"{dot} <b>{title} ({len(rows)})</b>\n{body}")
     msgs.append(f"👀 <b>Watching</b> (RSI stretched, no signal yet): {watching['long']} oversold · {watching['short']} overbought")
+    if paper_line:
+        msgs.append(paper_line)
     return msgs
 
 
@@ -483,6 +485,182 @@ def send_digest(msgs, dry_run):
         print(m)
         if not dry_run:
             send_telegram(m, as_html=True)
+
+
+# ---------------------------------------------------------------- paper trading (5-minute E, --fast)
+# Rule: enter at the close of the E bar; stop = protected low/high (a bar CLOSING beyond it = fail);
+# target = EMA200 at entry. If it fails, a paper reversal is opened at the failing close
+# (stop = extreme of the failed trade) and tracked with three exits: 1R, 2R, close back across EMA20.
+PAPER_FILE = os.environ.get("PAPER_LEDGER", "paper_trades.json")
+PAPER_CSV = os.environ.get("PAPER_CSV", "paper_trades.csv")
+PAPER_MAX_BARS = 600     # main trade is closed at market after this many 5-minute bars
+PAPER_REV_BARS = 300
+REV_MODES = ("1R", "2R", "ema20")
+PAPER_FIELDS = ["id", "ticker", "side", "entry_time_utc", "entry", "stop", "target", "status", "exit", "r",
+                "rev_entry", "rev_stop", "rev_r_1R", "rev_r_2R", "rev_r_ema20"]
+
+
+def paper_load():
+    try:
+        with open(PAPER_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def paper_save(led):
+    with open(PAPER_FILE, "w", encoding="utf-8") as f:
+        json.dump(led, f, indent=1)
+    with open(PAPER_CSV, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=PAPER_FIELDS)
+        w.writeheader()
+        for r in sorted(led.values(), key=lambda x: x["entry_time"]):
+            rev = r.get("rev") or {}
+            rr = rev.get("r") or {}
+            w.writerow(dict(id=r["id"], ticker=r["name"], side=r["side"], entry_time_utc=r["entry_time"],
+                            entry=r["entry"], stop=r["stop"], target=r["target"], status=r["status"],
+                            exit=r.get("exit") if r.get("exit") is not None else "",
+                            r=f"{r['r']:.2f}" if r.get("r") is not None else "",
+                            rev_entry=rev.get("entry", ""), rev_stop=rev.get("stop", ""),
+                            **{f"rev_r_{m}": (f"{rr[m]:.2f}" if rr.get(m) is not None else "") for m in REV_MODES}))
+
+
+def paper_plan(dd, i):
+    """Entry/stop/target in the (possibly mirrored) series, or None when there is no valid trade."""
+    ext = [k for k in range(max(0, i - P["ext_window"]), i + 1) if dd["rsi"][k] <= P["ext"]]
+    if not ext:
+        return None
+    stop = float(np.min(dd["l"][ext[-1]:i + 1]))
+    entry, target = float(dd["c"][i]), float(dd["emas"][i])
+    if entry - stop <= 0 or target - entry <= 0:
+        return None
+    return dict(entry=entry, stop=stop, target=target)
+
+
+def paper_sim(dd, i, plan):
+    """Replay the trade on the closed bars after i. Works in the long direction of the (mirrored) series."""
+    c, h, l, emas, emaf = dd["c"], dd["h"], dd["l"], dd["emas"], dd["emaf"]
+    n = len(c)
+    entry, stop = plan["entry"], plan["stop"]
+    risk = entry - stop
+    out = dict(status="open", exit=None, r=None, rev=None)
+    end = min(n, i + PAPER_MAX_BARS + 1)
+    fail_j = None
+    for j in range(i + 1, end):
+        if c[j] < stop:
+            out.update(status="fail", exit=float(c[j]), r=float((c[j] - entry) / risk))
+            fail_j = j
+            break
+        if h[j] >= emas[j]:
+            out.update(status="target", exit=float(emas[j]), r=float((emas[j] - entry) / risk))
+            break
+    else:
+        if end - 1 - i >= PAPER_MAX_BARS:
+            out.update(status="timeout", exit=float(c[end - 1]), r=float((c[end - 1] - entry) / risk))
+    if fail_j is not None:
+        e2, s2 = float(c[fail_j]), float(np.max(h[i:fail_j + 1]))
+        r2 = s2 - e2
+        if r2 > 0:
+            rev = dict(entry=e2, stop=s2, r={})
+            end2 = min(n, fail_j + PAPER_REV_BARS + 1)
+            for m in REV_MODES:
+                val = None
+                for j in range(fail_j + 1, end2):
+                    if h[j] >= s2:
+                        val = -1.0
+                    elif m == "1R" and l[j] <= e2 - r2:
+                        val = 1.0
+                    elif m == "2R" and l[j] <= e2 - 2 * r2:
+                        val = 2.0
+                    elif m == "ema20" and c[j] > emaf[j]:
+                        val = float((e2 - c[j]) / r2)
+                    if val is not None:
+                        break
+                if val is None and end2 - 1 - fail_j >= PAPER_REV_BARS:
+                    val = float((e2 - c[end2 - 1]) / r2)
+                rev["r"][m] = val
+            out["rev"] = rev
+    return out
+
+
+def paper_plan_text(name, side, plan, sign):
+    risk, reward = plan["entry"] - plan["stop"], plan["target"] - plan["entry"]
+    opp = "SHORT" if side == "long" else "LONG"
+    return (f"\n📝 PAPER TRADE {side.upper()} {name} 5M\n"
+            f"Entry {fmt(sign * plan['entry'])} (close of the E bar) | Stop {fmt(sign * plan['stop'])} "
+            f"(a bar closing beyond it = fail) | Target EMA200 {fmt(sign * plan['target'])}\n"
+            f"Risk {risk:.2f} pts ({risk / abs(plan['entry']) * 100:.2f}%) | Reward {reward / risk:.1f}R\n"
+            f"If it fails: paper reversal {opp} at the failing close.")
+
+
+def paper_register(led, name, side, dd, times, i, sign):
+    """Adds the trade to the ledger the first time its E bar is seen. Returns the text to append to the alert."""
+    plan = paper_plan(dd, i)
+    if plan is None:
+        return "\nNo paper trade: no valid stop, or price is already beyond EMA200."
+    rid = f"{name}|{side}|{times[i].isoformat()}"
+    if rid not in led:
+        led[rid] = dict(id=rid, name=name, side=side, entry_time=times[i].isoformat(),
+                        entry=sign * plan["entry"], stop=sign * plan["stop"], target=sign * plan["target"],
+                        status="open", exit=None, r=None, rev=None, notified=dict(main=False, rev=False))
+    return paper_plan_text(name, side, plan, sign)
+
+
+def paper_update(led, name, side, dd, times):
+    """Re-simulate this ticker/side's unfinished trades on the latest bars. Returns Telegram messages."""
+    sign = 1 if side == "long" else -1
+    opp = "SHORT" if side == "long" else "LONG"
+    msgs = []
+    for rec in led.values():
+        if rec["name"] != name or rec["side"] != side:
+            continue
+        if rec["status"] != "open" and rec["notified"]["main"] and (rec["rev"] is None or rec["notified"]["rev"]):
+            continue
+        try:
+            i = times.get_loc(pd.Timestamp(rec["entry_time"]))
+        except KeyError:
+            continue
+        plan = dict(entry=sign * rec["entry"], stop=sign * rec["stop"], target=sign * rec["target"])
+        sim = paper_sim(dd, i, plan)
+        rec["status"], rec["exit"], rec["r"] = sim["status"], (sign * sim["exit"] if sim["exit"] is not None else None), sim["r"]
+        if sim["rev"]:
+            rec["rev"] = dict(entry=sign * sim["rev"]["entry"], stop=sign * sim["rev"]["stop"], r=sim["rev"]["r"])
+        if rec["status"] != "open" and not rec["notified"]["main"]:
+            rec["notified"]["main"] = True
+            tag = f"PAPER {name} {side.upper()}"
+            if rec["status"] == "target":
+                msgs.append(f"✅ {tag} reached EMA200 at {fmt(rec['exit'])}: {rec['r']:+.2f}R")
+            elif rec["status"] == "fail":
+                txt = f"❌ {tag} failed (a bar closed beyond {fmt(rec['stop'])}) at {fmt(rec['exit'])}: {rec['r']:+.2f}R"
+                if rec["rev"]:
+                    txt += (f"\n🔁 Paper reversal {opp} opened at {fmt(rec['rev']['entry'])}, "
+                            f"stop {fmt(rec['rev']['stop'])} (1R / 2R / EMA20 exits tracked)")
+                msgs.append(txt)
+            else:
+                msgs.append(f"⌛ {tag} closed at market after {PAPER_MAX_BARS * 5 // 60}h at {fmt(rec['exit'])}: {rec['r']:+.2f}R")
+        rv = rec["rev"]
+        if rv and not rec["notified"]["rev"] and all(rv["r"].get(m) is not None for m in REV_MODES):
+            rec["notified"]["rev"] = True
+            msgs.append(f"🔁 PAPER reversal {opp} {name} closed: 1R exit {rv['r']['1R']:+.2f}R | "
+                        f"2R exit {rv['r']['2R']:+.2f}R | EMA20 exit {rv['r']['ema20']:+.2f}R")
+    return msgs
+
+
+def paper_stats(led):
+    """One or two lines for the daily summary, or None when there is nothing yet."""
+    done = [r for r in led.values() if r["status"] in ("target", "fail", "timeout") and r.get("r") is not None]
+    opn = sum(1 for r in led.values() if r["status"] == "open")
+    if not done and not opn:
+        return None
+    line = f"📝 <b>Paper trades (5M E)</b>: {len(done)} closed, {opn} open"
+    if done:
+        rs = [r["r"] for r in done]
+        line += f" | win {sum(x > 0 for x in rs) / len(rs) * 100:.0f}% | avg {sum(rs) / len(rs):+.2f}R | total {sum(rs):+.1f}R"
+    revs = [r["rev"]["r"] for r in done if r.get("rev") and all(r["rev"]["r"].get(m) is not None for m in REV_MODES)]
+    if revs:
+        line += f"\n🔁 Reversals ({len(revs)}): " + " | ".join(
+            f"{m} {sum(x[m] for x in revs) / len(revs):+.2f}R avg" for m in REV_MODES)
+    return line
 
 
 # ---------------------------------------------------------------- main
@@ -508,6 +686,7 @@ def main():
     names = [n.strip() for n in args.only.split(",")] if args.only else list(TICKERS_CFG)
     tfs = [t.strip().upper() for t in args.tf.split(",")]
     state = load_state()
+    ledger = paper_load()
     sent = 0
     loaded = 0
     demo = []
@@ -528,8 +707,9 @@ def main():
                 loaded += 1
                 d = indicators(bars)
                 times = pd.DatetimeIndex(bars["start"]).tz_convert("UTC")
-                res[tf] = dict(times=times, last=len(bars) - 1, sides={})
+                res[tf] = dict(times=times, last=len(bars) - 1, sides={}, dd={})
                 for side, dd in (("long", d), ("short", mirror(d))):
+                    res[tf]["dd"][side] = dd
                     res[tf]["sides"][side] = track(dd)
             except SystemExit:
                 raise
@@ -557,12 +737,13 @@ def main():
                         continue
                     if i < last - lookback + 1:
                         continue
+                    plan_txt = paper_register(ledger, name, side, res[tf]["dd"][side], times, i, sign) if (args.fast and ev == "E") else ""
                     # 4H keeps its original key format so earlier alerts are not repeated
                     key = f"{name}|{side}|{ev}" if tf == "4H" else f"{name}|{tf}|{side}|{ev}"
                     bar_iso = times[i].isoformat()
                     if state.get(key) == bar_iso:
                         continue
-                    msg = message(name, tf, side, ev, lvl, times[i], info, None if args.fast else status)
+                    msg = message(name, tf, side, ev, lvl, times[i], info, None if args.fast else status) + plan_txt
                     print(msg)
                     if not args.dry_run:
                         send_telegram(msg)
@@ -577,6 +758,13 @@ def main():
                             reward_risk=f"{info['rr']:.2f}" if info and ok(info["rr"]) else "",
                             score=info["score"] if info else "",
                             same_side_status=" ".join(f"{k}:{v}" for k, v in status.items())))
+
+        if args.fast and "5M" in res:
+            for side in ("long", "short"):
+                for m in paper_update(ledger, name, side, res["5M"]["dd"][side], res["5M"]["times"]):
+                    print(m)
+                    if not args.dry_run:
+                        send_telegram(m)
 
     if args.demo:
         # most recent past signal of each kind per timeframe and side, labelled DEMO; does not touch state or log
@@ -597,8 +785,10 @@ def main():
     now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
     due = (not args.only) and not args.fast and now.hour >= DIGEST_HOUR_UTC and state.get("_digest_date") != today
+    if args.fast and not args.dry_run:
+        paper_save(ledger)
     if loaded and (args.digest or due):
-        send_digest(build_digest(active, watching, now), args.dry_run)
+        send_digest(build_digest(active, watching, now, paper_stats(ledger)), args.dry_run)
         if not args.dry_run:
             state["_digest_date"] = today
 
