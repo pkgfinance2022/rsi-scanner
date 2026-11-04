@@ -1,1 +1,36 @@
-{}
+{
+ "BTCUSD|short|2026-11-04T19:00:00+00:00": {
+  "id": "BTCUSD|short|2026-11-04T19:00:00+00:00",
+  "name": "BTCUSD",
+  "side": "short",
+  "entry_time": "2026-11-04T19:00:00+00:00",
+  "entry": 80095.4375,
+  "stop": 81075.6015625,
+  "target": 78883.90403847738,
+  "status": "open",
+  "exit": null,
+  "r": null,
+  "rev": null,
+  "notified": {
+   "main": false,
+   "rev": false
+  }
+ },
+ "ETHUSD|short|2026-11-04T19:00:00+00:00": {
+  "id": "ETHUSD|short|2026-11-04T19:00:00+00:00",
+  "name": "ETHUSD",
+  "side": "short",
+  "entry_time": "2026-11-04T19:00:00+00:00",
+  "entry": 2412.3701171875,
+  "stop": 2444.27001953125,
+  "target": 2351.4973809878957,
+  "status": "open",
+  "exit": null,
+  "r": null,
+  "rev": null,
+  "notified": {
+   "main": false,
+   "rev": false
+  }
+ }
+}
