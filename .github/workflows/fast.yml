@@ -47,6 +47,6 @@ jobs:
             echo "No paper-trade changes"
           else
             git commit -m "Update paper trades [skip ci]"
-            git pull --rebase -q
+            git pull --rebase --autostash -q
             git push
           fi
