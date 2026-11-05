@@ -24,12 +24,12 @@
   "entry": 2412.3701171875,
   "stop": 2444.27001953125,
   "target": 2351.4973809878957,
-  "status": "open",
-  "exit": null,
-  "r": null,
+  "status": "target",
+  "exit": 2411.0931219235586,
+  "r": 0.040031322045461996,
   "rev": null,
   "notified": {
-   "main": false,
+   "main": true,
    "rev": false
   }
  }
