@@ -17,3 +17,4 @@ sent_utc,ticker,timeframe,side,event,bar_time_utc,price,line_level,risk_pct,ema2
 2026-11-04 13:03,SILVER,4H,long,E,2026-11-04T09:00:00+00:00,,,,,,,4H:ACTIVE D:WATCH W:-
 2026-11-04 18:53,MSFT,4H,short,FAIL,2026-11-04T14:30:00+00:00,,551.15,,,,,4H:- D:- W:-
 2026-11-04 18:54,BX,4H,long,TARGET,2026-11-04T14:30:00+00:00,,123.073,,,,,4H:- D:- W:-
+2026-11-05 00:04,ETHUSD,4H,long,S,2026-11-04T20:00:00+00:00,,,,,,,4H:- D:- W:-
