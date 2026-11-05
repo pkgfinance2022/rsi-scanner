@@ -32,5 +32,39 @@
    "main": true,
    "rev": false
   }
+ },
+ "BTCUSD|long|2026-11-05T19:45:00+00:00": {
+  "id": "BTCUSD|long|2026-11-05T19:45:00+00:00",
+  "name": "BTCUSD",
+  "side": "long",
+  "entry_time": "2026-11-05T19:45:00+00:00",
+  "entry": 76358.59375,
+  "stop": 75545.28125,
+  "target": 78287.22177729671,
+  "status": "open",
+  "exit": null,
+  "r": null,
+  "rev": null,
+  "notified": {
+   "main": false,
+   "rev": false
+  }
+ },
+ "ETHUSD|long|2026-11-05T19:45:00+00:00": {
+  "id": "ETHUSD|long|2026-11-05T19:45:00+00:00",
+  "name": "ETHUSD",
+  "side": "long",
+  "entry_time": "2026-11-05T19:45:00+00:00",
+  "entry": 2262.25,
+  "stop": 2239.60009765625,
+  "target": 2339.0262051465497,
+  "status": "open",
+  "exit": null,
+  "r": null,
+  "rev": null,
+  "notified": {
+   "main": false,
+   "rev": false
+  }
  }
 }
