@@ -23,3 +23,4 @@ sent_utc,ticker,timeframe,side,event,bar_time_utc,price,line_level,risk_pct,ema2
 2026-11-05 03:03,JPN225,D,short,TARGET,2026-11-03T15:00:00+00:00,,61411.3,,,,,4H:- D:- W:WATCH
 2026-11-05 05:03,XAUUSD,4H,long,TARGET,2026-11-05T01:00:00+00:00,,4140.09,,,,,4H:- D:- W:-
 2026-11-05 05:04,MCD,D,long,TARGET,2026-11-04T05:00:00+00:00,,273.46,,,,,4H:- D:- W:WATCH
+2026-11-05 08:03,BANKNIFTY,4H,long,TARGET,2026-11-05T03:45:00+00:00,,56080.2,,,,,4H:- D:- W:-
