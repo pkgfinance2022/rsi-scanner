@@ -66,5 +66,22 @@
    "main": false,
    "rev": false
   }
+ },
+ "NAS100|long|2026-11-05T19:45:00+00:00": {
+  "id": "NAS100|long|2026-11-05T19:45:00+00:00",
+  "name": "NAS100",
+  "side": "long",
+  "entry_time": "2026-11-05T19:45:00+00:00",
+  "entry": 27093.0,
+  "stop": 26816.0,
+  "target": 27767.27585632611,
+  "status": "open",
+  "exit": null,
+  "r": null,
+  "rev": null,
+  "notified": {
+   "main": false,
+   "rev": false
+  }
  }
 }
