@@ -83,11 +83,11 @@
   "entry": 27093.0,
   "stop": 26816.0,
   "target": 27767.27585632611,
-  "status": "open",
-  "exit": null,
-  "r": null,
+  "status": "fail",
+  "exit": 26746.5,
+  "r": -1.2509025270758123,
   "rev": {
-   "entry": 26810.0,
+   "entry": 26746.5,
    "stop": 27180.0,
    "r": {
     "1R": null,
