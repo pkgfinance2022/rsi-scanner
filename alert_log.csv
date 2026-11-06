@@ -25,3 +25,4 @@ sent_utc,ticker,timeframe,side,event,bar_time_utc,price,line_level,risk_pct,ema2
 2026-11-05 05:04,MCD,D,long,TARGET,2026-11-04T05:00:00+00:00,,273.46,,,,,4H:- D:- W:WATCH
 2026-11-05 08:03,BANKNIFTY,4H,long,TARGET,2026-11-05T03:45:00+00:00,,56080.2,,,,,4H:- D:- W:-
 2026-11-05 23:04,GD,4H,short,B,2026-11-05T18:30:00+00:00,356.35,386.6,8.49,0.13,0.02,2,4H:ACTIVE D:- W:ACTIVE
+2026-11-06 02:03,DJ30,4H,short,S,2026-11-05T18:30:00+00:00,,,,,,,4H:- D:- W:WATCH
