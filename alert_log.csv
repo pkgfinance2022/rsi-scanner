@@ -30,3 +30,4 @@ sent_utc,ticker,timeframe,side,event,bar_time_utc,price,line_level,risk_pct,ema2
 2026-11-06 15:03,JPN225,W,short,B,2026-11-01T15:00:00+00:00,57434.8,72831.7,26.81,20.57,0.77,2,4H:- D:- W:ACTIVE
 2026-11-06 17:03,USDCAD,4H,long,S,2026-11-06T13:00:00+00:00,,,,,,,4H:- D:- W:-
 2026-11-06 17:03,GBPUSD,4H,short,TARGET,2026-11-06T13:00:00+00:00,,1.33627,,,,,4H:- D:- W:-
+2026-11-06 18:31,GD,4H,short,TARGET,2026-11-06T14:30:00+00:00,,355.661,,,,,4H:- D:- W:ACTIVE
