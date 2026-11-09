@@ -133,12 +133,12 @@
   "entry": 75214.453125,
   "stop": 74565.546875,
   "target": 75677.6119124119,
-  "status": "open",
-  "exit": null,
-  "r": null,
+  "status": "target",
+  "exit": 75392.0612629337,
+  "r": 0.27370384848920387,
   "rev": null,
   "notified": {
-   "main": false,
+   "main": true,
    "rev": false
   }
  }
