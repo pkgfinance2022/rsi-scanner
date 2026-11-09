@@ -124,5 +124,22 @@
    "main": true,
    "rev": false
   }
+ },
+ "BTCUSD|long|2026-11-09T01:05:00+00:00": {
+  "id": "BTCUSD|long|2026-11-09T01:05:00+00:00",
+  "name": "BTCUSD",
+  "side": "long",
+  "entry_time": "2026-11-09T01:05:00+00:00",
+  "entry": 75214.453125,
+  "stop": 74565.546875,
+  "target": 75677.6119124119,
+  "status": "open",
+  "exit": null,
+  "r": null,
+  "rev": null,
+  "notified": {
+   "main": false,
+   "rev": false
+  }
  }
 }
