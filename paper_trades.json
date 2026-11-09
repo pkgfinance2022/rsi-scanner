@@ -141,5 +141,22 @@
    "main": true,
    "rev": false
   }
+ },
+ "XAUUSD|short|2026-11-09T06:30:00+00:00": {
+  "id": "XAUUSD|short|2026-11-09T06:30:00+00:00",
+  "name": "XAUUSD",
+  "side": "short",
+  "entry_time": "2026-11-09T06:30:00+00:00",
+  "entry": 4121.10009765625,
+  "stop": 4141.60009765625,
+  "target": 4093.4777307133368,
+  "status": "open",
+  "exit": null,
+  "r": null,
+  "rev": null,
+  "notified": {
+   "main": false,
+   "rev": false
+  }
  }
 }
