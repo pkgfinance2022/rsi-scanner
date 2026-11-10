@@ -38,3 +38,4 @@ sent_utc,ticker,timeframe,side,event,bar_time_utc,price,line_level,risk_pct,ema2
 2026-11-07 05:04,FTNT,W,short,B,2026-11-02T05:00:00+00:00,118.84,197.13,65.88,21.69,0.33,3,4H:- D:- W:ACTIVE
 2026-11-07 05:04,FTNT,W,short,E,2026-11-02T05:00:00+00:00,,,,,,,4H:- D:- W:ACTIVE
 2026-11-08 00:00,NZDUSD,D,long,FAIL,2026-11-07T00:00:00+00:00,,0.5567,,,,,4H:- D:RETRY W:-
+2026-11-10 00:03,NZDUSD,D,long,FAIL,2026-11-09T00:00:00+00:00,,0.5567,,,,,4H:- D:RETRY W:-
