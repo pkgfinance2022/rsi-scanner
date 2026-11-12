@@ -1,8 +1,8 @@
-name: fast-5m-E
+name: fast-15m-E
 
-# 5-minute E alerts for BTCUSD, ETHUSD, XAUUSD, SILVER.
-# No schedule on purpose: GitHub's own cron is too unreliable for 5 minutes.
-# Trigger it from cron-job.org every 5 minutes (same POST as the hourly one, but .../workflows/fast.yml/dispatches).
+# 15-minute E alerts for BTCUSD, ETHUSD, XAUUSD, SILVER, NAS100.
+# No schedule on purpose: GitHub's own cron is too unreliable for this.
+# Trigger it from cron-job.org every 15 minutes (same POST as the hourly one, but .../workflows/fast.yml/dispatches).
 on:
   workflow_dispatch:
 
@@ -30,7 +30,7 @@ jobs:
           path: scanner_state.json
           key: fast-state-${{ github.run_id }}
           restore-keys: fast-state-
-      - name: Scan 5-minute E
+      - name: Scan 15-minute E
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

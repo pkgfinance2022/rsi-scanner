@@ -100,9 +100,10 @@ LINE_ALERTS = True                   # green/red line: when it starts (B, B2), w
 if LINE_ALERTS:
     SEND_EVENTS |= {"B", "B2", "FAIL", "TARGET"}
 TIMEFRAMES = ["4H", "D", "W"]
-LOOKBACK = {"4H": 4, "D": 3, "W": 2, "5M": 3}   # closed bars to look back each run (dedupe prevents repeats)
-FAST_TICKERS = ["BTCUSD", "ETHUSD", "XAUUSD", "SILVER", "NAS100"]   # --fast mode: 5-minute E alerts for these only
-FAST_SYMBOL = {"NAS100": "NQ=F"}   # 5-minute data from the near-24h futures instead of the US-hours-only cash index
+LOOKBACK = {"4H": 4, "D": 3, "W": 2, "15M": 3}   # closed bars to look back each run (dedupe prevents repeats)
+FAST_TF, FAST_MIN = "15M", 15      # --fast mode timeframe (was 5M until 2026-11-12)
+FAST_TICKERS = ["BTCUSD", "ETHUSD", "XAUUSD", "SILVER", "NAS100"]   # --fast mode: E alerts on FAST_TF for these only
+FAST_SYMBOL = {"NAS100": "NQ=F"}   # 15-minute data from the near-24h futures instead of the US-hours-only cash index
 FAST_EVENTS = {"E"}
 DEMO_EVENTS = {"B+D", "S", "E"}
 DIGEST_HOUR_UTC = 6                  # daily "what's active" summary is sent by the first run at/after this UTC hour
@@ -309,8 +310,8 @@ def load_4h(symbol, name):
     return bars[closed]
 
 
-def load_5m(symbol):
-    raw = yf.Ticker(symbol).history(period="30d", interval="5m", auto_adjust=False)
+def load_fast(symbol):
+    raw = yf.Ticker(symbol).history(period="30d", interval=f"{FAST_MIN}m", auto_adjust=False)
     if raw is None or raw.empty:
         return None
     bars = raw[["Open", "High", "Low", "Close"]].dropna().copy()
@@ -320,14 +321,14 @@ def load_5m(symbol):
     idx = idx.tz_convert("UTC")
     bars.index = idx
     bars["start"] = idx
-    return bars[idx + pd.Timedelta(minutes=5) <= pd.Timestamp.now(tz="UTC")]   # drop the bar still forming
+    return bars[idx + pd.Timedelta(minutes=FAST_MIN) <= pd.Timestamp.now(tz="UTC")]   # drop the bar still forming
 
 
 def load_bars(symbol, name, tf):
     if tf == "4H":
         return load_4h(symbol, name)
-    if tf == "5M":
-        return load_5m(FAST_SYMBOL.get(name, symbol))
+    if tf == FAST_TF:
+        return load_fast(FAST_SYMBOL.get(name, symbol))
     interval, period = ("1d", "10y") if tf == "D" else ("1wk", "max")
     raw = yf.Ticker(symbol).history(period=period, interval=interval, auto_adjust=False)
     if raw is None or raw.empty:
@@ -427,7 +428,7 @@ def message(name, tf, side, ev, level, bar_time, info=None, mtf=None):
             "FAIL": f"Resistance line {lv} BROKEN (close above it): setup failed",
             "TARGET": f"Price reached EMA200 ({lv}): drop target hit, resistance line ends",
         }[ev]
-    when = f"{bar_time:%Y-%m-%d %H:%M} UTC" if tf in ("4H", "5M") else f"{bar_time:%Y-%m-%d}"
+    when = f"{bar_time:%Y-%m-%d %H:%M} UTC" if tf in ("4H", FAST_TF) else f"{bar_time:%Y-%m-%d}"
     out = f"{dot} {name} {tf} | {text}. (bar {when})"
     extras = []
     if info and ev in ("B", "B2", "B+D"):
@@ -487,16 +488,16 @@ def send_digest(msgs, dry_run):
             send_telegram(m, as_html=True)
 
 
-# ---------------------------------------------------------------- paper trading (5-minute E, --fast)
+# ---------------------------------------------------------------- paper trading (E on FAST_TF, --fast)
 # Rule: enter at the close of the E bar; stop = protected low/high (a bar CLOSING beyond it = fail);
 # target = EMA200 at entry. If it fails, a paper reversal is opened at the failing close
 # (stop = extreme of the failed trade) and tracked with three exits: 1R, 2R, close back across EMA20.
 PAPER_FILE = os.environ.get("PAPER_LEDGER", "paper_trades.json")
 PAPER_CSV = os.environ.get("PAPER_CSV", "paper_trades.csv")
-PAPER_MAX_BARS = 600     # main trade is closed at market after this many 5-minute bars
-PAPER_REV_BARS = 300
+PAPER_MAX_BARS = 50 * 60 // FAST_MIN     # main trade is closed at market after 50 hours
+PAPER_REV_BARS = 25 * 60 // FAST_MIN      # reversal tracked for 25 hours
 REV_MODES = ("1R", "2R", "ema20")
-PAPER_FIELDS = ["id", "ticker", "side", "entry_time_utc", "entry", "stop", "target", "status", "exit", "r",
+PAPER_FIELDS = ["id", "tf", "ticker", "side", "entry_time_utc", "entry", "stop", "target", "status", "exit", "r",
                 "rev_entry", "rev_stop", "rev_r_1R", "rev_r_2R", "rev_r_ema20"]
 
 
@@ -517,7 +518,7 @@ def paper_save(led):
         for r in sorted(led.values(), key=lambda x: x["entry_time"]):
             rev = r.get("rev") or {}
             rr = rev.get("r") or {}
-            w.writerow(dict(id=r["id"], ticker=r["name"], side=r["side"], entry_time_utc=r["entry_time"],
+            w.writerow(dict(id=r["id"], tf=r.get("tf", "5M"), ticker=r["name"], side=r["side"], entry_time_utc=r["entry_time"],
                             entry=r["entry"], stop=r["stop"], target=r["target"], status=r["status"],
                             exit=r.get("exit") if r.get("exit") is not None else "",
                             r=f"{r['r']:.2f}" if r.get("r") is not None else "",
@@ -586,7 +587,7 @@ def paper_sim(dd, i, plan):
 def paper_plan_text(name, side, plan, sign):
     risk, reward = plan["entry"] - plan["stop"], plan["target"] - plan["entry"]
     opp = "SHORT" if side == "long" else "LONG"
-    return (f"\n📝 PAPER TRADE {side.upper()} {name} 5M\n"
+    return (f"\n📝 PAPER TRADE {side.upper()} {name} {FAST_TF}\n"
             f"Entry {fmt(sign * plan['entry'])} (close of the E bar) | Stop {fmt(sign * plan['stop'])} "
             f"(a bar closing beyond it = fail) | Target EMA200 {fmt(sign * plan['target'])}\n"
             f"Risk {risk:.2f} pts ({risk / abs(plan['entry']) * 100:.2f}%) | Reward {reward / risk:.1f}R\n"
@@ -600,7 +601,7 @@ def paper_register(led, name, side, dd, times, i, sign):
         return "\nNo paper trade: no valid stop, or price is already beyond EMA200."
     rid = f"{name}|{side}|{times[i].isoformat()}"
     if rid not in led:
-        led[rid] = dict(id=rid, name=name, side=side, entry_time=times[i].isoformat(),
+        led[rid] = dict(id=rid, tf=FAST_TF, name=name, side=side, entry_time=times[i].isoformat(),
                         entry=sign * plan["entry"], stop=sign * plan["stop"], target=sign * plan["target"],
                         status="open", exit=None, r=None, rev=None, notified=dict(main=False, rev=False))
     return paper_plan_text(name, side, plan, sign)
@@ -612,8 +613,8 @@ def paper_update(led, name, side, dd, times):
     opp = "SHORT" if side == "long" else "LONG"
     msgs = []
     for rec in led.values():
-        if rec["name"] != name or rec["side"] != side:
-            continue
+        if rec["name"] != name or rec["side"] != side or rec.get("tf", "5M") != FAST_TF:
+            continue   # trades logged on the old 5M timeframe are left as they were
         if rec["status"] != "open" and rec["notified"]["main"] and (rec["rev"] is None or rec["notified"]["rev"]):
             continue
         try:
@@ -637,7 +638,7 @@ def paper_update(led, name, side, dd, times):
                             f"stop {fmt(rec['rev']['stop'])} (1R / 2R / EMA20 exits tracked)")
                 msgs.append(txt)
             else:
-                msgs.append(f"⌛ {tag} closed at market after {PAPER_MAX_BARS * 5 // 60}h at {fmt(rec['exit'])}: {rec['r']:+.2f}R")
+                msgs.append(f"⌛ {tag} closed at market after {PAPER_MAX_BARS * FAST_MIN // 60}h at {fmt(rec['exit'])}: {rec['r']:+.2f}R")
         rv = rec["rev"]
         if rv and not rec["notified"]["rev"] and all(rv["r"].get(m) is not None for m in REV_MODES):
             rec["notified"]["rev"] = True
@@ -648,11 +649,12 @@ def paper_update(led, name, side, dd, times):
 
 def paper_stats(led):
     """One or two lines for the daily summary, or None when there is nothing yet."""
+    led = {k: r for k, r in led.items() if r.get("tf", "5M") == FAST_TF}
     done = [r for r in led.values() if r["status"] in ("target", "fail", "timeout") and r.get("r") is not None]
     opn = sum(1 for r in led.values() if r["status"] == "open")
     if not done and not opn:
         return None
-    line = f"📝 <b>Paper trades (5M E)</b>: {len(done)} closed, {opn} open"
+    line = f"📝 <b>Paper trades ({FAST_TF} E)</b>: {len(done)} closed, {opn} open"
     if done:
         rs = [r["r"] for r in done]
         line += f" | win {sum(x > 0 for x in rs) / len(rs) * 100:.0f}% | avg {sum(rs) / len(rs):+.2f}R | total {sum(rs):+.1f}R"
@@ -673,10 +675,10 @@ def main():
     ap.add_argument("--demo", action="store_true", help="send the most recent PAST signal of each kind, labelled DEMO")
     ap.add_argument("--digest", action="store_true", help="send (or with --dry-run print) the daily summary now")
     ap.add_argument("--test-telegram", action="store_true", help="send one test message and exit")
-    ap.add_argument("--fast", action="store_true", help="5-minute E alerts for BTCUSD, ETHUSD, XAUUSD, SILVER only")
+    ap.add_argument("--fast", action="store_true", help="E alerts on the fast timeframe (FAST_TF) for the FAST_TICKERS only")
     args = ap.parse_args()
     if args.fast:
-        args.only, args.tf = ",".join(FAST_TICKERS), "5M"
+        args.only, args.tf = ",".join(FAST_TICKERS), FAST_TF
 
     if args.test_telegram:
         send_telegram("✅ RSI scanner (4H, D, W) connected. Test message from rsi_tracker_scanner.py")
@@ -768,9 +770,9 @@ def main():
                             score=info["score"] if info else "",
                             same_side_status=" ".join(f"{k}:{v}" for k, v in status.items())))
 
-        if args.fast and "5M" in res:
+        if args.fast and FAST_TF in res:
             for side in ("long", "short"):
-                for m in paper_update(ledger, name, side, res["5M"]["dd"][side], res["5M"]["times"]):
+                for m in paper_update(ledger, name, side, res[FAST_TF]["dd"][side], res[FAST_TF]["times"]):
                     print(m)
                     if not args.dry_run:
                         send_telegram(m)
