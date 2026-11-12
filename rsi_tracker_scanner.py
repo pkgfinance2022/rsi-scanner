@@ -62,6 +62,7 @@ TICKERS_CFG = {
     "SILVER": "SI=F",
     "COPPER": "HG=F",
     "USOIL": "CL=F",
+    "ALUMINIUM": "ALI=F",
 
     "AUS200": "^AXJO",
     "CHINA50": "FXI",
@@ -102,9 +103,13 @@ if LINE_ALERTS:
 TIMEFRAMES = ["4H", "D", "W"]
 LOOKBACK = {"4H": 4, "D": 3, "W": 2, "15M": 3}   # closed bars to look back each run (dedupe prevents repeats)
 FAST_TF, FAST_MIN = "15M", 15      # --fast mode timeframe (was 5M until 2026-11-12)
-FAST_TICKERS = ["BTCUSD", "ETHUSD", "XAUUSD", "SILVER", "NAS100"]   # --fast mode: E alerts on FAST_TF for these only
-FAST_SYMBOL = {"NAS100": "NQ=F"}   # 15-minute data from the near-24h futures instead of the US-hours-only cash index
-FAST_EVENTS = {"E"}
+FAST_TICKERS = ["BTCUSD", "ETHUSD", "XAUUSD", "SILVER", "NAS100"]   # --fast mode: only these get paper trades (and eToro demo orders) on E
+FAST_SYMBOL = {"NAS100": "NQ=F", "SPX": "ES=F", "DJ30": "YM=F", "RUSSELL2000": "RTY=F"}   # 15-minute data from the near-24h futures instead of the US-hours-only cash index
+FAST_WATCH = ["BTCUSD", "XRPUSD", "ETHUSD", "SOLUSD",                                   # 15M alerts: the TradingView watchlist
+              "GBPUSD", "EURUSD", "USDJPY", "USDCAD", "USDCHF",
+              "XAUUSD", "JPN225", "AUDUSD", "NZDUSD", "AUS200", "GER40", "SPX", "UK100", "DJ30", "FRA40", "NAS100",
+              "SILVER", "COPPER", "ALUMINIUM", "RUSSELL2000", "NL25", "IT40", "SIGI30", "USOIL",
+              "NIFTY50", "BANKNIFTY"]
 DEMO_EVENTS = {"B+D", "S", "E"}
 DIGEST_HOUR_UTC = 6                  # daily "what's active" summary is sent by the first run at/after this UTC hour
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -675,10 +680,10 @@ def main():
     ap.add_argument("--demo", action="store_true", help="send the most recent PAST signal of each kind, labelled DEMO")
     ap.add_argument("--digest", action="store_true", help="send (or with --dry-run print) the daily summary now")
     ap.add_argument("--test-telegram", action="store_true", help="send one test message and exit")
-    ap.add_argument("--fast", action="store_true", help="E alerts on the fast timeframe (FAST_TF) for the FAST_TICKERS only")
+    ap.add_argument("--fast", action="store_true", help="scan the fast timeframe (FAST_TF) for the FAST_WATCH list")
     args = ap.parse_args()
     if args.fast:
-        args.only, args.tf = ",".join(FAST_TICKERS), FAST_TF
+        args.only, args.tf = ",".join(FAST_WATCH), FAST_TF
 
     if args.test_telegram:
         send_telegram("✅ RSI scanner (4H, D, W) connected. Test message from rsi_tracker_scanner.py")
@@ -730,7 +735,7 @@ def main():
                 times, last = res[tf]["times"], res[tf]["last"]
                 lookback = args.lookback or LOOKBACK[tf]
                 for i, ev, level, info in res[tf]["sides"][side][0]:
-                    if ev not in (FAST_EVENTS if args.fast else SEND_EVENTS):
+                    if ev not in SEND_EVENTS:
                         continue
                     lvl = sign * level
                     if args.demo:
@@ -739,7 +744,7 @@ def main():
                         continue
                     if i < last - lookback + 1:
                         continue
-                    plan_txt = paper_register(ledger, name, side, res[tf]["dd"][side], times, i, sign) if (args.fast and ev == "E") else ""
+                    plan_txt = paper_register(ledger, name, side, res[tf]["dd"][side], times, i, sign) if (args.fast and ev == "E" and name in FAST_TICKERS) else ""
                     # 4H keeps its original key format so earlier alerts are not repeated
                     key = f"{name}|{side}|{ev}" if tf == "4H" else f"{name}|{tf}|{side}|{ev}"
                     bar_iso = times[i].isoformat()
@@ -751,7 +756,7 @@ def main():
                         send_telegram(msg)
                         state[key] = bar_iso
                         sent += 1
-                        if args.fast and ev == "E" and os.environ.get("ETORO_DEMO_ORDERS") == "1":
+                        if args.fast and ev == "E" and name in FAST_TICKERS and os.environ.get("ETORO_DEMO_ORDERS") == "1":
                             rec = ledger.get(f"{name}|{side}|{times[i].isoformat()}")
                             p = paper_plan(res[tf]["dd"][side], i)
                             if rec is not None and p is not None and "demo" not in rec:

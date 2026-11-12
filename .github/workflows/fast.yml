@@ -1,6 +1,6 @@
 name: fast-15m-E
 
-# 15-minute E alerts for BTCUSD, ETHUSD, XAUUSD, SILVER, NAS100.
+# 15-minute alerts for the watchlist (FAST_WATCH in the scanner); paper trades and demo orders only for FAST_TICKERS.
 # No schedule on purpose: GitHub's own cron is too unreliable for this.
 # Trigger it from cron-job.org every 15 minutes (same POST as the hourly one, but .../workflows/fast.yml/dispatches).
 on:
@@ -16,7 +16,7 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
