@@ -108,7 +108,7 @@ FAST_SYMBOL = {"NAS100": "NQ=F", "SPX": "ES=F", "DJ30": "YM=F", "RUSSELL2000": "
 FAST_WATCH = ["BTCUSD", "XRPUSD", "ETHUSD", "SOLUSD",                                   # 15M alerts: the TradingView watchlist
               "GBPUSD", "EURUSD", "USDJPY", "USDCAD", "USDCHF",
               "XAUUSD", "JPN225", "AUDUSD", "NZDUSD", "AUS200", "GER40", "SPX", "UK100", "DJ30", "FRA40", "NAS100",
-              "SILVER", "COPPER", "ALUMINIUM", "RUSSELL2000", "NL25", "IT40", "SIGI30", "USOIL",
+              "SILVER", "COPPER", "ALUMINIUM", "RUSSELL2000", "NL25", "IT40", "USOIL",
               "NIFTY50", "BANKNIFTY"]
 DEMO_EVENTS = {"B+D", "S", "E"}
 DIGEST_HOUR_UTC = 6                  # daily "what's active" summary is sent by the first run at/after this UTC hour
