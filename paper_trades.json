@@ -158,5 +158,22 @@
    "main": true,
    "rev": false
   }
+ },
+ "SILVER|long|2026-11-12T00:45:00+00:00": {
+  "id": "SILVER|long|2026-11-12T00:45:00+00:00",
+  "name": "SILVER",
+  "side": "long",
+  "entry_time": "2026-11-12T00:45:00+00:00",
+  "entry": 51.584999084472656,
+  "stop": 51.15999984741211,
+  "target": 52.05704309185468,
+  "status": "open",
+  "exit": null,
+  "r": null,
+  "rev": null,
+  "notified": {
+   "main": false,
+   "rev": false
+  }
  }
 }
