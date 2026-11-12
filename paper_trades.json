@@ -184,12 +184,12 @@
   "entry": 28297.75,
   "stop": 28131.75,
   "target": 28350.20915656734,
-  "status": "open",
-  "exit": null,
-  "r": null,
+  "status": "target",
+  "exit": 28346.241559634305,
+  "r": 0.2921178291223211,
   "rev": null,
   "notified": {
-   "main": false,
+   "main": true,
    "rev": false
   }
  },
@@ -201,12 +201,12 @@
   "entry": 28287.5,
   "stop": 28131.75,
   "target": 28350.578495304282,
-  "status": "open",
-  "exit": null,
-  "r": null,
+  "status": "target",
+  "exit": 28346.241559634305,
+  "r": 0.377152870846262,
   "rev": null,
   "notified": {
-   "main": false,
+   "main": true,
    "rev": false
   }
  }
