@@ -47,7 +47,6 @@ TICKERS_CFG = {
     "UK100": "^FTSE",
     "JPN225": "^N225",
     "NL25": "^AEX",
-    "SIGI30": "^STI",
     "IT40": "FTSEMIB.MI",
 
     "USDCAD": "USDCAD=X",
