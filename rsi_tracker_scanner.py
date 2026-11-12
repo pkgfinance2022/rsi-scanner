@@ -409,7 +409,7 @@ def message(name, tf, side, ev, level, bar_time, info=None, mtf=None):
     long_ = side == "long"
     lv = fmt(level) if level == level else ""      # level == level is False for NaN
     if long_:
-        dot = {"S": "🟢", "B+D": "🟢", "B": "🟢", "B2": "🟢", "E": "🟠", "WATCH": "🟡", "FAIL": "⚠️", "TARGET": "🎯"}[ev]
+        dot = {"S": "🟢", "B+D": "🟢", "B": "🟢", "B2": "🟢", "E": "🟠", "WATCH": "🟡", "FAIL": "🚨", "TARGET": "🎯"}[ev]
         text = {
             "B+D": f"B+D: buy signal with bullish RSI divergence. Support line (protected low) at {lv}",
             "B": f"B: first buy. Support line (protected low) starts at {lv}",
@@ -417,11 +417,11 @@ def message(name, tf, side, ev, level, bar_time, info=None, mtf=None):
             "S": "S: broke above EMA200, retest held as support",
             "E": "E: RSI hit the extreme low and is back above 45, be ready",
             "WATCH": "WATCH: RSI oversold, start watching",
-            "FAIL": f"Support line {lv} BROKEN (close below it): setup failed",
+            "FAIL": f"Support line {lv} BROKEN (close below it): setup failed, possible SELL to check",
             "TARGET": f"Price reached EMA200 ({lv}): pull-up target hit, support line ends",
         }[ev]
     else:
-        dot = {"S": "🔴", "B+D": "🔴", "B": "🔴", "B2": "🔴", "E": "🟠", "WATCH": "🟡", "FAIL": "⚠️", "TARGET": "🎯"}[ev]
+        dot = {"S": "🔴", "B+D": "🔴", "B": "🔴", "B2": "🔴", "E": "🟠", "WATCH": "🟡", "FAIL": "🚨", "TARGET": "🎯"}[ev]
         text = {
             "B+D": f"S+D: sell signal with bearish RSI divergence. Resistance line (protected high) at {lv}",
             "B": f"S: first sell. Resistance line (protected high) starts at {lv}",
@@ -429,7 +429,7 @@ def message(name, tf, side, ev, level, bar_time, info=None, mtf=None):
             "S": "R: broke below EMA200, retest held as resistance",
             "E": "E: RSI hit the extreme high and is back below 55, be ready",
             "WATCH": "WATCH: RSI overbought, start watching",
-            "FAIL": f"Resistance line {lv} BROKEN (close above it): setup failed",
+            "FAIL": f"Resistance line {lv} BROKEN (close above it): setup failed, possible BUY to check",
             "TARGET": f"Price reached EMA200 ({lv}): drop target hit, resistance line ends",
         }[ev]
     when = f"{bar_time:%Y-%m-%d %H:%M} UTC" if tf in ("4H", FAST_TF) else f"{bar_time:%Y-%m-%d}"
@@ -455,6 +455,27 @@ def message(name, tf, side, ev, level, bar_time, info=None, mtf=None):
     if mtf and ev in ("B", "B2", "B+D", "S", "E"):
         extras.append(mtf_text(mtf))
     return out + ("\n" + "\n".join(extras) if extras else "")
+
+
+def break_plan(events, dd, i, sign, side):
+    """Extra lines for a FAIL alert: the opposite-direction trade idea after the protected line broke.
+    Entry = the breaking close, stop = highest high (lowest low for shorts) since the line started."""
+    origin = next(((j, ev) for j, ev, _, _ in reversed(events) if j < i and ev in ("B", "B2", "B+D")), None)
+    if origin is None:
+        return ""
+    j0, ev0 = origin
+    entry, stop = float(dd["c"][i]), float(np.max(dd["h"][j0:i + 1]))
+    r = stop - entry
+    if r <= 0:
+        return ""
+    names = {"B+D": "B+D" if side == "long" else "S+D", "B": "B" if side == "long" else "S", "B2": "B2" if side == "long" else "S2"}
+    trade = "SELL" if side == "long" else "BUY"
+    return (f"\nBroken line came from the {names[ev0]} signal. Check the chart for a {trade}:\n"
+            f"{trade} idea: entry about {fmt(sign * entry)} (this close) | stop {fmt(sign * stop)} "
+            f"({r / abs(entry) * 100:.2f}% away, {'highest high' if side == 'long' else 'lowest low'} since the line started) | "
+            f"1R {fmt(sign * (entry - r))} | 2R {fmt(sign * (entry - 2 * r))}\n"
+            f"Be careful: in past data about 6 in 10 breaks close back across the line within a few bars, "
+            f"and only about 1 in 6 run another 1R. Wait for follow-through before acting.")
 
 
 def digest_table(rows):
@@ -744,6 +765,8 @@ def main():
                     if i < last - lookback + 1:
                         continue
                     plan_txt = paper_register(ledger, name, side, res[tf]["dd"][side], times, i, sign) if (args.fast and ev == "E" and name in FAST_TICKERS) else ""
+                    if ev == "FAIL":
+                        plan_txt = break_plan(res[tf]["sides"][side][0], res[tf]["dd"][side], i, sign, side)
                     # 4H keeps its original key format so earlier alerts are not repeated
                     key = f"{name}|{side}|{ev}" if tf == "4H" else f"{name}|{tf}|{side}|{ev}"
                     bar_iso = times[i].isoformat()
