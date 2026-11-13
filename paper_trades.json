@@ -270,5 +270,23 @@
    "main": false,
    "rev": false
   }
+ },
+ "BTCUSD|long|2026-11-13T13:30:00+00:00": {
+  "id": "BTCUSD|long|2026-11-13T13:30:00+00:00",
+  "tf": "15M",
+  "name": "BTCUSD",
+  "side": "long",
+  "entry_time": "2026-11-13T13:30:00+00:00",
+  "entry": 69753.0703125,
+  "stop": 67842.5078125,
+  "target": 71457.89462325427,
+  "status": "open",
+  "exit": null,
+  "r": null,
+  "rev": null,
+  "notified": {
+   "main": false,
+   "rev": false
+  }
  }
 }
