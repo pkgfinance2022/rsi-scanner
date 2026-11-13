@@ -252,5 +252,23 @@
    "main": false,
    "rev": false
   }
+ },
+ "ETHUSD|long|2026-11-13T11:15:00+00:00": {
+  "id": "ETHUSD|long|2026-11-13T11:15:00+00:00",
+  "tf": "15M",
+  "name": "ETHUSD",
+  "side": "long",
+  "entry_time": "2026-11-13T11:15:00+00:00",
+  "entry": 1954.25,
+  "stop": 1902.260009765625,
+  "target": 2011.290179252556,
+  "status": "open",
+  "exit": null,
+  "r": null,
+  "rev": null,
+  "notified": {
+   "main": false,
+   "rev": false
+  }
  }
 }
