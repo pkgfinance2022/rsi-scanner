@@ -234,5 +234,23 @@
    "main": false,
    "rev": false
   }
+ },
+ "XAUUSD|long|2026-11-13T01:15:00+00:00": {
+  "id": "XAUUSD|long|2026-11-13T01:15:00+00:00",
+  "tf": "15M",
+  "name": "XAUUSD",
+  "side": "long",
+  "entry_time": "2026-11-13T01:15:00+00:00",
+  "entry": 3908.39990234375,
+  "stop": 3856.699951171875,
+  "target": 3969.2070986920685,
+  "status": "open",
+  "exit": null,
+  "r": null,
+  "rev": null,
+  "notified": {
+   "main": false,
+   "rev": false
+  }
  }
 }
