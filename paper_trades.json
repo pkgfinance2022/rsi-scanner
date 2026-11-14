@@ -262,12 +262,20 @@
   "entry": 1954.25,
   "stop": 1902.260009765625,
   "target": 2011.290179252556,
-  "status": "open",
-  "exit": null,
-  "r": null,
-  "rev": null,
+  "status": "fail",
+  "exit": 1887.1099853515625,
+  "r": -1.2914027170569755,
+  "rev": {
+   "entry": 1887.1099853515625,
+   "stop": 1986.8900146484375,
+   "r": {
+    "1R": null,
+    "2R": null,
+    "ema20": null
+   }
+  },
   "notified": {
-   "main": false,
+   "main": true,
    "rev": false
   }
  },
@@ -280,12 +288,20 @@
   "entry": 69753.0703125,
   "stop": 67842.5078125,
   "target": 71457.89462325427,
-  "status": "open",
-  "exit": null,
-  "r": null,
-  "rev": null,
+  "status": "fail",
+  "exit": 67203.296875,
+  "r": -1.3345668814812393,
+  "rev": {
+   "entry": 67203.296875,
+   "stop": 70129.796875,
+   "r": {
+    "1R": null,
+    "2R": null,
+    "ema20": null
+   }
+  },
   "notified": {
-   "main": false,
+   "main": true,
    "rev": false
   }
  }
