@@ -90,7 +90,7 @@ FX_ANCHOR_HOUR_UTC = 1   # 4H bars open 01,05,09,13,17,21 UTC. CHECK against you
 # ---------------------------------------------------------------- parameters (same defaults as the Pine scripts)
 P = dict(
     rsi_len=28, ma_len=14, fast=20, slow=200, mid=60, atr_len=14,
-    os=30.0, lvl1=45.0, lvl2=50.0, ext=20.0, ext_window=60, sustain=2,
+    os=30.0, lvl1=45.0, lvl2=50.0, ext=22.0, ext_window=60, sustain=2,
     need_ma=True, need_ema20=True,
     watch_bars=24, fail_expiry=80, max_attempts=2, break_on_close=True,
     arm_bars=120, sup_tol_mult=0.3, sup_bull=True, keep_on_fail=True, only_bd=True,
@@ -104,7 +104,7 @@ LOOKBACK = {"4H": 4, "D": 3, "W": 2, "15M": 3}   # closed bars to look back each
 FAST_TF, FAST_MIN = "15M", 15      # --fast mode timeframe (was 5M until 2026-11-12)
 FAST_TICKERS = ["BTCUSD", "ETHUSD", "XAUUSD", "SILVER", "NAS100"]   # --fast mode: only these get paper trades (and eToro demo orders) on E
 FAST_SYMBOL = {"NAS100": "NQ=F", "SPX": "ES=F", "DJ30": "YM=F", "RUSSELL2000": "RTY=F"}   # 15-minute data from the near-24h futures instead of the US-hours-only cash index
-EXT_LEVEL = {"15M": 22.0, "D": 22.0}   # RSI extreme that arms E (22 / 78); tested: better than 20 / 80 on 15M and Daily, worse on 4H, which stays at 20 / 80
+EXT_LEVEL = {"15M": 22.0, "4H": 22.0, "D": 22.0, "W": 22.0}   # RSI extreme that arms E: 22 / 78 on every timeframe (was 20 / 80; 4H tested slightly worse, kept by choice)
 E_CROSS = {"15M": 50.0}   # E fires when RSI crosses above this (below 100 minus this for shorts); other timeframes use the BUY level (45 / 55)
 FX = {"USDCAD", "USDJPY", "GBPUSD", "EURUSD", "USDCHF", "AUDUSD", "NZDUSD"}
 FX_STOP_ROOM_ATR = 0.5     # currency pairs: stop this many ATR beyond the low/high (tested: saves some wick stop-outs)
