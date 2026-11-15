@@ -16,6 +16,9 @@ It starts in **dry run on testnet**: it only prints and sends Telegram messages.
 | `DELTA_MAX_LEVERAGE` | `10` | the bot also keeps the stop inside half of the liquidation distance |
 | `DELTA_MAX_OPEN` | `2` | trades open at once |
 | `DELTA_DAILY_LOSS_USD` | `3 x risk` | no new entries after this loss in a UTC day |
+| `DELTA_STOP_ROOM_ATR` | `0` | extra room beyond the wick in ATR (0 for crypto and gold; tested no benefit) |
+| `DELTA_SECOND_CHANCE` | `1` | after a buy reached its target, sell when its protected low breaks later (stop = extreme since the E, target 2R) |
+| `DELTA_MIN_GAP_PCT` / `DELTA_REQUIRE_COLOR` | `1.0` / `1` | EMA20 at least this far from EMA200 (% of price); E candle must close in the trade direction |
 | `DELTA_TARGET_ATR` | `0.5` | exit this many ATR before EMA200 |
 | `DELTA_CONTRA` / `DELTA_CONTRA_R` | `1` / `2` | contra trade after a stop, exit at 2R |
 | `DELTA_TESTNET_BASE` / `DELTA_LIVE_BASE` | India URLs | change both if your account is on Delta Global |

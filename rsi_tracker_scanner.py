@@ -105,6 +105,8 @@ FAST_TF, FAST_MIN = "15M", 15      # --fast mode timeframe (was 5M until 2026-11
 FAST_TICKERS = ["BTCUSD", "ETHUSD", "XAUUSD", "SILVER", "NAS100"]   # --fast mode: only these get paper trades (and eToro demo orders) on E
 FAST_SYMBOL = {"NAS100": "NQ=F", "SPX": "ES=F", "DJ30": "YM=F", "RUSSELL2000": "RTY=F"}   # 15-minute data from the near-24h futures instead of the US-hours-only cash index
 E_CROSS = {"15M": 50.0}   # E fires when RSI crosses above this (below 100 minus this for shorts); other timeframes use the BUY level (45 / 55)
+FX = {"USDCAD", "USDJPY", "GBPUSD", "EURUSD", "USDCHF", "AUDUSD", "NZDUSD"}
+FX_STOP_ROOM_ATR = 0.5     # currency pairs: stop this many ATR beyond the low/high (tested: saves some wick stop-outs)
 FAST_WATCH = ["BTCUSD", "XRPUSD", "ETHUSD", "SOLUSD",                                   # 15M alerts: the TradingView watchlist
               "GBPUSD", "EURUSD", "USDJPY", "USDCAD", "USDCHF",
               "XAUUSD", "JPN225", "AUDUSD", "NZDUSD", "AUS200", "GER40", "SPX", "UK100", "DJ30", "FRA40", "NAS100",
@@ -523,9 +525,11 @@ PAPER_FILE = os.environ.get("PAPER_LEDGER", "paper_trades.json")
 PAPER_CSV = os.environ.get("PAPER_CSV", "paper_trades.csv")
 PAPER_MAX_BARS = 50 * 60 // FAST_MIN     # main trade is closed at market after 50 hours
 PAPER_REV_BARS = 100 * 60 // FAST_MIN     # reversal tracked for 100 hours
+SECOND_WATCH_BARS = 600     # after a trade has reached its target, keep watching its protected low for this many bars (150 h)
+SECOND_MAX_BARS = 400       # the second-chance trade is followed for 100 h
 PAPER_REQUIRE_COLOR = True     # the E candle must close in the trade direction, otherwise no paper trade
 REV_MODES = ("1R", "2R", "ema20")
-PAPER_FIELDS = ["id", "tf", "ticker", "side", "entry_time_utc", "entry", "stop", "target", "status", "exit", "r",
+PAPER_FIELDS = ["id", "tf", "ticker", "side", "entry_time_utc", "entry", "stop", "target", "status", "exit", "r", "second_time", "second_status", "second_r",
                 "rev_entry", "rev_stop", "rev_r_1R", "rev_r_2R", "rev_r_ema20"]
 
 
@@ -550,16 +554,22 @@ def paper_save(led):
                             entry=r["entry"], stop=r["stop"], target=r["target"], status=r["status"],
                             exit=r.get("exit") if r.get("exit") is not None else "",
                             r=f"{r['r']:.2f}" if r.get("r") is not None else "",
+                            second_time=(r.get("second") or {}).get("time", ""), second_status=(r.get("second") or {}).get("status", ""),
+                            second_r=(f"{r['second']['r']:.2f}" if (r.get("second") or {}).get("r") is not None else ""),
                             rev_entry=rev.get("entry", ""), rev_stop=rev.get("stop", ""),
                             **{f"rev_r_{m}": (f"{rr[m]:.2f}" if rr.get(m) is not None else "") for m in REV_MODES}))
 
 
-def paper_plan(dd, i):
+def stop_room(name):
+    return FX_STOP_ROOM_ATR if name in FX else 0.0
+
+
+def paper_plan(dd, i, room_atr=0.0):
     """Entry/stop/target in the (possibly mirrored) series, or None when there is no valid trade."""
     ext = [k for k in range(max(0, i - P["ext_window"] - 1), i + 1) if dd["rsi"][k] <= P["ext"]]   # E can fire one bar after the window ends
     if not ext:
         return None
-    stop = float(np.min(dd["l"][ext[-1]:i + 1]))
+    stop = float(np.min(dd["l"][ext[-1]:i + 1])) - room_atr * float(dd["atr"][i])
     entry, target = float(dd["c"][i]), float(dd["emas"][i])
     if entry - stop <= 0 or target - entry <= 0:
         return None
@@ -577,15 +587,15 @@ def paper_sim(dd, i, plan):
     fail_j = None
     for j in range(i + 1, end):
         if c[j] < stop:
-            out.update(status="fail", exit=float(c[j]), r=float((c[j] - entry) / risk))
+            out.update(status="fail", exit=float(c[j]), r=float((c[j] - entry) / risk), j=j)
             fail_j = j
             break
         if h[j] >= emas[j]:
-            out.update(status="target", exit=float(emas[j]), r=float((emas[j] - entry) / risk))
+            out.update(status="target", exit=float(emas[j]), r=float((emas[j] - entry) / risk), j=j)
             break
     else:
         if end - 1 - i >= PAPER_MAX_BARS:
-            out.update(status="timeout", exit=float(c[end - 1]), r=float((c[end - 1] - entry) / risk))
+            out.update(status="timeout", exit=float(c[end - 1]), r=float((c[end - 1] - entry) / risk), j=end - 1)
     if fail_j is not None:
         e2, s2 = float(c[fail_j]), float(np.max(h[i:fail_j + 1]))
         r2 = s2 - e2
@@ -624,7 +634,7 @@ def paper_plan_text(name, side, plan, sign):
 
 def paper_register(led, name, side, dd, times, i, sign):
     """Adds the trade to the ledger the first time its E bar is seen. Returns the text to append to the alert."""
-    plan = paper_plan(dd, i)
+    plan = paper_plan(dd, i, stop_room(name))
     if plan is None:
         return "\nNo paper trade: no valid stop, or price is already beyond EMA200."
     if PAPER_REQUIRE_COLOR and not dd["c"][i] > dd["o"][i]:
@@ -637,6 +647,54 @@ def paper_register(led, name, side, dd, times, i, sign):
     return paper_plan_text(name, side, plan, sign)
 
 
+def paper_second_chance(rec, dd, times, i, plan, jt, sign, name, side, opp):
+    """After the main trade finished WITHOUT being stopped (target or time limit), keep watching its protected low.
+    The first bar that closes beyond it opens a second-chance trade in the other direction: stop = the extreme reached since
+    the E bar, target 2R, followed for SECOND_MAX_BARS. Returns Telegram messages."""
+    c, h, l = dd["c"], dd["h"], dd["l"]
+    n = len(c)
+    msgs = []
+    sec = rec.get("second")
+    if sec is None:
+        jb = next((k for k in range(jt + 1, min(n, i + 1 + SECOND_WATCH_BARS)) if c[k] < plan["stop"]), None)
+        if jb is None:
+            if n >= i + 1 + SECOND_WATCH_BARS:
+                rec["second_done"] = True                      # watch window over, nothing happened
+            return msgs
+        e2, s2 = float(c[jb]), float(np.max(h[i:jb + 1]))
+        r2 = s2 - e2
+        if r2 <= 0:
+            rec["second_done"] = True
+            return msgs
+        sec = rec["second"] = dict(time=times[jb].isoformat(), entry=sign * e2, stop=sign * s2, target=sign * (e2 - 2 * r2), status="open", r=None)
+        msgs.append(f"🔁 SECOND CHANCE {opp} {name}: the protected low {fmt(rec['stop'])} of the earlier {side.upper()} trade has now broken "
+                    f"(a bar closed at {fmt(sign * e2)}), after that trade had already finished. Idea: {opp} at about {fmt(sign * e2)}, "
+                    f"stop {fmt(sign * s2)}, target {fmt(sign * (e2 - 2 * r2))} (2R). A test idea: wait for follow-through.")
+    if sec["status"] == "open":
+        try:
+            jb = times.get_loc(pd.Timestamp(sec["time"]))
+        except KeyError:
+            return msgs
+        e2, s2 = sign * sec["entry"], sign * sec["stop"]
+        r2, t2 = s2 - e2, sign * sec["target"]
+        end = min(n, jb + 1 + SECOND_MAX_BARS)
+        val = None
+        for m in range(jb + 1, end):
+            if h[m] >= s2:
+                val = -1.0
+            elif l[m] <= t2:
+                val = 2.0
+            if val is not None:
+                break
+        if val is None and end - 1 - jb >= SECOND_MAX_BARS:
+            val = float((e2 - c[end - 1]) / r2)
+        if val is not None:
+            sec["status"], sec["r"] = ("target" if val >= 2 else "stop" if val <= -1 else "timeout"), val
+            rec["second_done"] = True
+            msgs.append(f"{'🎯' if val > 0 else '❌'} Second-chance {opp} {name} {sec['status']}: {val:+.2f}R")
+    return msgs
+
+
 def paper_update(led, name, side, dd, times):
     """Re-simulate this ticker/side's unfinished trades on the latest bars. Returns Telegram messages."""
     sign = 1 if side == "long" else -1
@@ -645,7 +703,8 @@ def paper_update(led, name, side, dd, times):
     for rec in led.values():
         if rec["name"] != name or rec["side"] != side or rec.get("tf", "5M") != FAST_TF:
             continue   # trades logged on the old 5M timeframe are left as they were
-        if rec["status"] != "open" and rec["notified"]["main"] and (rec["rev"] is None or rec["notified"]["rev"]):
+        second_pending = rec["status"] in ("target", "timeout") and not rec.get("second_done")
+        if rec["status"] != "open" and rec["notified"]["main"] and (rec["rev"] is None or rec["notified"]["rev"]) and not second_pending:
             continue
         try:
             i = times.get_loc(pd.Timestamp(rec["entry_time"]))
@@ -669,6 +728,8 @@ def paper_update(led, name, side, dd, times):
                 msgs.append(txt)
             else:
                 msgs.append(f"⌛ {tag} closed at market after {PAPER_MAX_BARS * FAST_MIN // 60}h at {fmt(rec['exit'])}: {rec['r']:+.2f}R")
+        if rec["status"] in ("target", "timeout") and sim.get("j") is not None:
+            msgs += paper_second_chance(rec, dd, times, i, plan, sim["j"], sign, name, side, opp)
         rv = rec["rev"]
         if rv and not rec["notified"]["rev"] and all(rv["r"].get(m) is not None for m in REV_MODES):
             rec["notified"]["rev"] = True
@@ -688,6 +749,9 @@ def paper_stats(led):
     if done:
         rs = [r["r"] for r in done]
         line += f" | win {sum(x > 0 for x in rs) / len(rs) * 100:.0f}% | avg {sum(rs) / len(rs):+.2f}R | total {sum(rs):+.1f}R"
+    seconds = [r["second"]["r"] for r in led.values() if (r.get("second") or {}).get("r") is not None]
+    if seconds:
+        line += f"\n🔁 Second-chance trades ({len(seconds)}): avg {sum(seconds) / len(seconds):+.2f}R, total {sum(seconds):+.1f}R"
     revs = [r["rev"]["r"] for r in done if r.get("rev") and all(r["rev"]["r"].get(m) is not None for m in REV_MODES)]
     if revs:
         line += f"\n🔁 Reversals ({len(revs)}): " + " | ".join(
@@ -769,7 +833,7 @@ def main():
                         continue
                     if i < last - lookback + 1:
                         continue
-                    plan_txt = paper_register(ledger, name, side, res[tf]["dd"][side], times, i, sign) if (args.fast and ev == "E" and name in FAST_TICKERS) else ""
+                    plan_txt = paper_register(ledger, name, side, res[tf]["dd"][side], times, i, sign) if (args.fast and ev == "E" and (name in FAST_TICKERS or name in FX)) else ""
                     if ev == "FAIL":
                         plan_txt = break_plan(res[tf]["sides"][side][0], res[tf]["dd"][side], i, sign, side)
                     # 4H keeps its original key format so earlier alerts are not repeated

@@ -60,6 +60,9 @@ TARGET_ATR = float(os.environ.get("DELTA_TARGET_ATR", "0.5"))      # exit this m
 CONTRA_R = float(os.environ.get("DELTA_CONTRA_R", "2"))
 CONTRA_ON = os.environ.get("DELTA_CONTRA", "1") == "1"
 MIN_RR = float(os.environ.get("DELTA_MIN_RR", "0"))                # skip trades whose target is closer than this many R
+STOP_ROOM_ATR = float(os.environ.get("DELTA_STOP_ROOM_ATR", "0"))      # extra room beyond the wick, in ATR (0 on crypto and gold: tested, no benefit)
+SECOND_ON = os.environ.get("DELTA_SECOND_CHANCE", "1") == "1"         # after a buy reached its target, sell when its protected low breaks later
+SECOND_WATCH_BARS = 600                                              # watch for 150 h after the E bar
 MIN_GAP_PCT = float(os.environ.get("DELTA_MIN_GAP_PCT", "1.0"))          # EMA20 must be at least this far from EMA200 (% of price): enough room for momentum
 REQUIRE_COLOR = os.environ.get("DELTA_REQUIRE_COLOR", "1") == "1"  # the E candle must close in the trade direction (green for a buy, red for a sell)
 TRIGGER = os.environ.get("DELTA_STOP_TRIGGER", "last_traded_price")  # or mark_price
@@ -206,7 +209,7 @@ def find_signals(symbol, df):
         for i, ev, lvl, info in S.track(dd, E_LEVEL)[0]:
             if ev != "E" or i < n - 2:
                 continue
-            plan = S.paper_plan(dd, i)
+            plan = S.paper_plan(dd, i, STOP_ROOM_ATR)
             if not plan:
                 continue
             entry = abs(plan["entry"])
@@ -217,7 +220,7 @@ def find_signals(symbol, df):
             if tp_pct / stop_pct < MIN_RR:
                 continue
             out.append(dict(side=side, bar=df["start"].iloc[i].isoformat(), stop_pct=stop_pct, tp_pct=tp_pct, late=(i < n - 1),
-                            color_ok=bool(dd["c"][i] > dd["o"][i]),
+                            level=(1 if side == "long" else -1) * plan["stop"], color_ok=bool(dd["c"][i] > dd["o"][i]),
                             gap_pct=float((dd["emas"][i] - dd["emaf"][i]) / abs(dd["c"][i]) * 100)))
     return out
 
@@ -256,7 +259,7 @@ def sizing(symbol, price, stop_pct, risk_usd):
     return size, lev
 
 
-def open_trade(state, symbol, side, bar, stop_px, tp_px, price, stop_pct, kind, parent=None, risk_usd=None):
+def open_trade(state, symbol, side, bar, stop_px, tp_px, price, stop_pct, kind, parent=None, risk_usd=None, level=None):
     if product(symbol).get("_live_copy") and not DRY_RUN:
         note(f"⛔ {symbol} is not listed on {ENV}: skipped")
         return None
@@ -282,7 +285,7 @@ def open_trade(state, symbol, side, bar, stop_px, tp_px, price, stop_pct, kind, 
     res = private("POST", "/v2/orders", body=body)["result"]
     t = dict(id=tid, kind=kind, symbol=symbol, side=side, pid=pid, size=size, order_id=res.get("id"), opened=time.time(),
              stop=float(fmt_price(symbol, stop_px)), tp=float(fmt_price(symbol, tp_px)), stop_pct=stop_pct, status="open",
-             entry=None, parent=parent, bar=bar)
+             entry=None, parent=parent, bar=bar, level=level)
     state["trades"][tid] = t
     note(f"✅ DELTA {ENV.upper()} order placed: {plan}")
     log_row(id=tid, kind=kind, symbol=symbol, side=side, size=size, stop=t["stop"], target=t["tp"], result="opened")
@@ -310,9 +313,47 @@ def close_market(t, why):
     note(f"🔔 DELTA {t['kind']} {t['side'].upper()} {t['symbol']}: closing at market ({why})")
 
 
+def second_chance(state, t, frames):
+    """A main trade that ended at its TARGET: keep watching its protected low (the level in candle prices). The first bar
+    that trades through it opens a trade the other way: stop = the extreme reached since the E bar, target CONTRA_R x risk."""
+    sym, sign = t["symbol"], 1 if t["side"] == "long" else -1
+    df = frames.get(sym)
+    if df is None or t.get("level") is None or t.get("closed_at") is None:
+        return
+    e_bar = pd.Timestamp(t["bar"])
+    if pd.Timestamp.now(tz="UTC") - e_bar > pd.Timedelta(minutes=15 * SECOND_WATCH_BARS):
+        t["second_done"] = True
+        return
+    since = df[df["start"] >= pd.Timestamp(t["closed_at"], unit="s", tz="UTC").floor("15min")]
+    broke = since[since["Low"] <= t["level"]] if sign > 0 else since[since["High"] >= t["level"]]
+    if broke.empty:
+        return
+    if os.path.exists(KILL_FILE) or sum(1 for x in state["trades"].values() if x["status"] == "open") >= MAX_OPEN:
+        return                                                # try again on a later pass while the watch window lasts
+    if realized_today(state) <= -DAILY_LOSS_USD:
+        return
+    b = broke.iloc[0]
+    seg = df[(df["start"] >= e_bar) & (df["start"] <= b["start"])]
+    ext = float(seg["High"].max()) if sign > 0 else float(seg["Low"].min())
+    ref = float(b["Close"])
+    r2_pct = abs(ext - ref) / ref
+    if r2_pct <= 0:
+        t["second_done"] = True
+        return
+    vp = venue_price(sym)
+    price = vp["bid"] if sign > 0 else vp["ask"]
+    side2 = "short" if sign > 0 else "long"
+    note(f"🔁 {sym} second chance: the protected low of the earlier {t['side'].upper()} trade broke after it reached its target")
+    t["second_done"] = True
+    open_trade(state, sym, side2, t["bar"], price * (1 + sign * r2_pct), price * (1 - sign * CONTRA_R * r2_pct), price, r2_pct, "second", parent=t["id"])
+
+
 def manage(state, frames):
     """Update, close and finish the open trades."""
     for t in list(state["trades"].values()):
+        if SECOND_ON and t["status"] == "closed" and t["kind"] == "main" and t.get("pnl_R", 0) > 0 and not t.get("second_done"):
+            second_chance(state, t, frames)
+            continue
         if t["status"] != "open":
             continue
         sym, sign = t["symbol"], 1 if t["side"] == "long" else -1
@@ -326,7 +367,7 @@ def manage(state, frames):
                 t["status"] = "no_fill"
                 note(f"⚠️ {t['kind']} {t['side'].upper()} {sym}: no fills found, marked closed (check Delta)")
                 continue
-            t["entry"], t["exit"], t["status"] = entry, exit_, "closed"
+            t["entry"], t["exit"], t["status"], t["closed_at"] = entry, exit_, "closed", time.time()
             risk = abs(entry - t["stop"]) or 1e-9
             t["pnl_R"] = sign * (exit_ - entry) / risk
             res = "target" if t["pnl_R"] > 0 else "stop"
@@ -412,7 +453,7 @@ def scan(state, frames):
             price = vp["ask"] if long_ else vp["bid"]
             sign = 1 if long_ else -1
             open_trade(state, sym, sig["side"], sig["bar"], price * (1 - sign * sig["stop_pct"]),
-                       price * (1 + sign * sig["tp_pct"]), price, sig["stop_pct"], "main")
+                       price * (1 + sign * sig["tp_pct"]), price, sig["stop_pct"], "main", level=sig["level"])
     return lines, found
 
 
