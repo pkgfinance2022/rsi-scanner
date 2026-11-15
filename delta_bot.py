@@ -356,12 +356,15 @@ def realized_today(state):
 
 
 def scan(state, frames):
+    lines, found = [], 0
     for sym in SYMBOLS:
         df = frames.get(sym)
         if df is None or len(df) < 260:
             print(f"{sym}: not enough candles")
             continue
+        lines.append(f"{sym} bar {df['start'].iloc[-1]:%H:%M}")
         for sig in find_signals(sym, df):
+            found += 1
             key = f"{sym}|{sig['side']}|{sig['bar']}"
             if key in state["seen"]:
                 continue
@@ -384,6 +387,13 @@ def scan(state, frames):
             sign = 1 if long_ else -1
             open_trade(state, sym, sig["side"], sig["bar"], price * (1 - sign * sig["stop_pct"]),
                        price * (1 + sign * sig["tp_pct"]), price, sig["stop_pct"], "main")
+    return lines, found
+
+
+def status_line(lines, found):
+    mode = "DRY RUN" if DRY_RUN else "ORDERS ON"
+    print(f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC | {ENV} {mode} | last closed 15M bar: " + ", ".join(lines)
+          + (f" | {found} E signal(s) on the last 2 bars" if found else " | no new E signal"), flush=True)
 
 
 def once():
@@ -396,8 +406,9 @@ def once():
             print(f"{sym}: candles failed: {e}")
     if not DRY_RUN:
         manage(state, frames)
-    scan(state, frames)
+    lines, found = scan(state, frames)
     save_state(state)
+    status_line(lines, found)
 
 
 # ---------------------------------------------------------------- tools
