@@ -1,3 +1,9 @@
 scanner_state.json
 .env
 __pycache__/
+
+# Delta bot runtime files (never commit)
+delta_state.json
+delta_trades.csv
+STOP
+.env
