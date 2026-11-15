@@ -68,6 +68,7 @@ REQUIRE_COLOR = os.environ.get("DELTA_REQUIRE_COLOR", "1") == "1"  # the E candl
 TRIGGER = os.environ.get("DELTA_STOP_TRIGGER", "last_traded_price")  # or mark_price
 MAIN_MAX_BARS, CONTRA_MAX_BARS = 200, 400                          # 15M bars: 50 h and 100 h
 E_LEVEL = 50.0
+EXT = S.EXT_LEVEL["15M"]                                     # RSI extreme that arms E (22 / 78 on 15M)
 STATE_FILE = os.environ.get("DELTA_STATE", os.path.join(HERE, "delta_state.json"))
 LOG_FILE = os.path.join(HERE, "delta_trades.csv")
 KILL_FILE = os.path.join(HERE, "STOP")
@@ -206,10 +207,10 @@ def find_signals(symbol, df):
     n = len(df)
     out = []
     for side, dd in (("long", d), ("short", S.mirror(d))):
-        for i, ev, lvl, info in S.track(dd, E_LEVEL)[0]:
+        for i, ev, lvl, info in S.track(dd, E_LEVEL, True, EXT)[0]:
             if ev != "E" or i < n - 2:
                 continue
-            plan = S.paper_plan(dd, i, STOP_ROOM_ATR)
+            plan = S.paper_plan(dd, i, STOP_ROOM_ATR, EXT)
             if not plan:
                 continue
             entry = abs(plan["entry"])

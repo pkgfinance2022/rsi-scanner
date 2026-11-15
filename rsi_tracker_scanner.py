@@ -104,6 +104,7 @@ LOOKBACK = {"4H": 4, "D": 3, "W": 2, "15M": 3}   # closed bars to look back each
 FAST_TF, FAST_MIN = "15M", 15      # --fast mode timeframe (was 5M until 2026-11-12)
 FAST_TICKERS = ["BTCUSD", "ETHUSD", "XAUUSD", "SILVER", "NAS100"]   # --fast mode: only these get paper trades (and eToro demo orders) on E
 FAST_SYMBOL = {"NAS100": "NQ=F", "SPX": "ES=F", "DJ30": "YM=F", "RUSSELL2000": "RTY=F"}   # 15-minute data from the near-24h futures instead of the US-hours-only cash index
+EXT_LEVEL = {"15M": 22.0, "D": 22.0}   # RSI extreme that arms E (22 / 78); tested: better than 20 / 80 on 15M and Daily, worse on 4H, which stays at 20 / 80
 E_CROSS = {"15M": 50.0}   # E fires when RSI crosses above this (below 100 minus this for shorts); other timeframes use the BUY level (45 / 55)
 FX = {"USDCAD", "USDJPY", "GBPUSD", "EURUSD", "USDCHF", "AUDUSD", "NZDUSD"}
 FX_STOP_ROOM_ATR = 0.5     # currency pairs: stop this many ATR beyond the low/high (tested: saves some wick stop-outs)
@@ -157,9 +158,10 @@ def mirror(d):
 
 
 # ---------------------------------------------------------------- tracker (port of the Pine state machine)
-def track(d, e_level=None, e_color=True):
+def track(d, e_level=None, e_color=True, ext_level=None):
     """Returns (events, final). events: (bar_index, name, level, info). final: state at the last bar."""
     n = len(d["c"])
+    ext_level = P["ext"] if ext_level is None else ext_level      # RSI extreme that arms E (mirrored data: 100 minus the real level)
     e_level = P["lvl1"] if e_level is None else e_level   # RSI level the E recovery must cross (mirrored data: 100 minus the real level)
     state = 0
     attempt = 0
@@ -260,7 +262,7 @@ def track(d, e_level=None, e_color=True):
             armed, above200 = False, False
 
         # Extreme + recovery
-        if rsi <= P["ext"]:
+        if rsi <= ext_level:
             ext_armed, ext_bar = True, i
         ready = ext_armed and (rsi > e_level and rsi_prev <= e_level)
         if ready or i - ext_bar > P["ext_window"]:
@@ -564,9 +566,9 @@ def stop_room(name):
     return FX_STOP_ROOM_ATR if name in FX else 0.0
 
 
-def paper_plan(dd, i, room_atr=0.0):
+def paper_plan(dd, i, room_atr=0.0, ext_level=None):
     """Entry/stop/target in the (possibly mirrored) series, or None when there is no valid trade."""
-    ext = [k for k in range(max(0, i - P["ext_window"] - 1), i + 1) if dd["rsi"][k] <= P["ext"]]   # E can fire one bar after the window ends
+    ext = [k for k in range(max(0, i - P["ext_window"] - 1), i + 1) if dd["rsi"][k] <= (P["ext"] if ext_level is None else ext_level)]   # E can fire one bar after the window ends
     if not ext:
         return None
     stop = float(np.min(dd["l"][ext[-1]:i + 1])) - room_atr * float(dd["atr"][i])
@@ -634,7 +636,7 @@ def paper_plan_text(name, side, plan, sign):
 
 def paper_register(led, name, side, dd, times, i, sign):
     """Adds the trade to the ledger the first time its E bar is seen. Returns the text to append to the alert."""
-    plan = paper_plan(dd, i, stop_room(name))
+    plan = paper_plan(dd, i, stop_room(name), EXT_LEVEL.get(FAST_TF))
     if plan is None:
         return "\nNo paper trade: no valid stop, or price is already beyond EMA200."
     if PAPER_REQUIRE_COLOR and not dd["c"][i] > dd["o"][i]:
@@ -806,7 +808,8 @@ def main():
                 res[tf] = dict(times=times, last=len(bars) - 1, sides={}, dd={})
                 for side, dd in (("long", d), ("short", mirror(d))):
                     res[tf]["dd"][side] = dd
-                    res[tf]["sides"][side] = track(dd, (E_CROSS[tf] if side == "long" else 100 - E_CROSS[tf]) if tf in E_CROSS else None)
+                    res[tf]["sides"][side] = track(dd, (E_CROSS[tf] if side == "long" else 100 - E_CROSS[tf]) if tf in E_CROSS else None,
+                                                   ext_level=EXT_LEVEL.get(tf))
             except SystemExit:
                 raise
             except Exception as e:
@@ -849,7 +852,7 @@ def main():
                         sent += 1
                         if args.fast and ev == "E" and name in FAST_TICKERS and os.environ.get("ETORO_DEMO_ORDERS") == "1":
                             rec = ledger.get(f"{name}|{side}|{times[i].isoformat()}")
-                            p = paper_plan(res[tf]["dd"][side], i)
+                            p = paper_plan(res[tf]["dd"][side], i, stop_room(name), EXT_LEVEL.get(tf))
                             if rec is not None and p is not None and "demo" not in rec:
                                 import etoro_demo      # DEMO account only; see etoro_demo.py
                                 rec["demo"] = etoro_demo.place(
