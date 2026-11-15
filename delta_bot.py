@@ -107,16 +107,14 @@ def private(method, path, params=None, body=None):
 def log_text(line):
     try:
         with open(LOG_TXT, "a", encoding="utf-8") as f:
-            f.write(f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC | {line}
-")
+            f.write(f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC | {line}\n")
     except OSError:
         pass
 
 
 def note(msg):
     print(msg, flush=True)
-    log_text(msg.replace("
-", " / "))
+    log_text(msg.replace("\n", " / "))
     try:
         S.send_telegram(msg)
     except BaseException as e:                     # Telegram is optional here
