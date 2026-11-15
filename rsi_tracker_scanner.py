@@ -555,7 +555,7 @@ def paper_save(led):
 
 def paper_plan(dd, i):
     """Entry/stop/target in the (possibly mirrored) series, or None when there is no valid trade."""
-    ext = [k for k in range(max(0, i - P["ext_window"]), i + 1) if dd["rsi"][k] <= P["ext"]]
+    ext = [k for k in range(max(0, i - P["ext_window"] - 1), i + 1) if dd["rsi"][k] <= P["ext"]]   # E can fire one bar after the window ends
     if not ext:
         return None
     stop = float(np.min(dd["l"][ext[-1]:i + 1]))
