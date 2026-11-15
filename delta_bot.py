@@ -61,7 +61,7 @@ CONTRA_R = float(os.environ.get("DELTA_CONTRA_R", "2"))
 CONTRA_ON = os.environ.get("DELTA_CONTRA", "1") == "1"
 MIN_RR = float(os.environ.get("DELTA_MIN_RR", "0"))                # skip trades whose target is closer than this many R
 STOP_ROOM_ATR = float(os.environ.get("DELTA_STOP_ROOM_ATR", "0"))      # extra room beyond the wick, in ATR (0 on crypto and gold: tested, no benefit)
-SECOND_ON = os.environ.get("DELTA_SECOND_CHANCE", "1") == "1"         # after a buy reached its target, sell when its protected low breaks later
+SECOND_ON = os.environ.get("DELTA_SECOND_CHANCE", "0") == "1"         # OFF by default: after a buy reached its target, sell when its protected low breaks later (broader tests show no edge)
 SECOND_WATCH_BARS = 600                                              # watch for 150 h after the E bar
 MIN_GAP_PCT = float(os.environ.get("DELTA_MIN_GAP_PCT", "1.0"))          # EMA20 must be at least this far from EMA200 (% of price): enough room for momentum
 REQUIRE_COLOR = os.environ.get("DELTA_REQUIRE_COLOR", "1") == "1"  # the E candle must close in the trade direction (green for a buy, red for a sell)
