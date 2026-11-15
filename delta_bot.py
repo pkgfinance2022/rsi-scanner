@@ -4,8 +4,8 @@ Rule (long; shorts are the mirror image)
   Entry   market order at the close of a 15M E bar (RSI crossed above 50 after an extreme low)
   Stop    top of the last wick: the lowest low since the RSI extreme (hard stop on the exchange, hit on touch)
   Target  the moving EMA200 minus TARGET_ATR x ATR ("just before 200 EMA"); moved every bar, closed at market when reached
-  If the stop is hit: a contra trade in the opposite direction, stop = the original entry (the E level), target = CONTRA_R x risk
-  Limits  max hold 50 h (main) / 25 h (contra)
+  If the stop is hit: a contra trade in the opposite direction, stop = the extreme the failed trade reached since the E bar, target = CONTRA_R x risk
+  Limits  max hold 50 h (main) / 100 h (contra)
 
 SAFETY (all on by default)
   * DELTA_DRY_RUN=1 (default): signals and order plans are printed / sent to Telegram, nothing is sent to Delta.
@@ -61,7 +61,7 @@ CONTRA_R = float(os.environ.get("DELTA_CONTRA_R", "2"))
 CONTRA_ON = os.environ.get("DELTA_CONTRA", "1") == "1"
 MIN_RR = float(os.environ.get("DELTA_MIN_RR", "0"))                # skip trades whose target is closer than this many R
 TRIGGER = os.environ.get("DELTA_STOP_TRIGGER", "last_traded_price")  # or mark_price
-MAIN_MAX_BARS, CONTRA_MAX_BARS = 200, 100                          # 15M bars: 50 h and 25 h
+MAIN_MAX_BARS, CONTRA_MAX_BARS = 200, 400                          # 15M bars: 50 h and 100 h
 E_LEVEL = 50.0
 STATE_FILE = os.environ.get("DELTA_STATE", os.path.join(HERE, "delta_state.json"))
 LOG_FILE = os.path.join(HERE, "delta_trades.csv")
@@ -332,7 +332,13 @@ def manage(state, frames):
                     stop=t["stop"], target=t["tp"], result=res, pnl_R=f"{t['pnl_R']:.2f}")
             if t["kind"] == "main" and res == "stop" and CONTRA_ON:
                 side2 = "short" if t["side"] == "long" else "long"
-                s2 = entry                                    # contra stop = the E level (where the main trade was entered)
+                ext = entry                                   # contra stop = the extreme the failed trade reached since the E bar
+                df = frames.get(sym)
+                if df is not None:
+                    since = df[df["start"] >= pd.Timestamp(t["bar"])]
+                    if len(since):
+                        ext = float(since["High"].max()) if sign > 0 else float(since["Low"].min())
+                s2 = max(ext, entry) if sign > 0 else min(ext, entry)
                 r2 = abs(s2 - exit_)
                 tp2 = exit_ - sign * CONTRA_R * r2
                 open_trade(state, sym, side2, t["bar"], s2, tp2, exit_, r2 / exit_, "contra", parent=t["id"])

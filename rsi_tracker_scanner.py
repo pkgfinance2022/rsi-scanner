@@ -522,7 +522,7 @@ def send_digest(msgs, dry_run):
 PAPER_FILE = os.environ.get("PAPER_LEDGER", "paper_trades.json")
 PAPER_CSV = os.environ.get("PAPER_CSV", "paper_trades.csv")
 PAPER_MAX_BARS = 50 * 60 // FAST_MIN     # main trade is closed at market after 50 hours
-PAPER_REV_BARS = 25 * 60 // FAST_MIN      # reversal tracked for 25 hours
+PAPER_REV_BARS = 100 * 60 // FAST_MIN     # reversal tracked for 100 hours
 REV_MODES = ("1R", "2R", "ema20")
 PAPER_FIELDS = ["id", "tf", "ticker", "side", "entry_time_utc", "entry", "stop", "target", "status", "exit", "r",
                 "rev_entry", "rev_stop", "rev_r_1R", "rev_r_2R", "rev_r_ema20"]
