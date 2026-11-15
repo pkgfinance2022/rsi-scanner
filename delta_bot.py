@@ -60,6 +60,7 @@ TARGET_ATR = float(os.environ.get("DELTA_TARGET_ATR", "0.5"))      # exit this m
 CONTRA_R = float(os.environ.get("DELTA_CONTRA_R", "2"))
 CONTRA_ON = os.environ.get("DELTA_CONTRA", "1") == "1"
 MIN_RR = float(os.environ.get("DELTA_MIN_RR", "0"))                # skip trades whose target is closer than this many R
+REQUIRE_COLOR = os.environ.get("DELTA_REQUIRE_COLOR", "1") == "1"  # the E candle must close in the trade direction (green for a buy, red for a sell)
 TRIGGER = os.environ.get("DELTA_STOP_TRIGGER", "last_traded_price")  # or mark_price
 MAIN_MAX_BARS, CONTRA_MAX_BARS = 200, 400                          # 15M bars: 50 h and 100 h
 E_LEVEL = 50.0
@@ -214,7 +215,8 @@ def find_signals(symbol, df):
             stop_pct, tp_pct = (plan["entry"] - plan["stop"]) / entry, (level - plan["entry"]) / entry
             if tp_pct / stop_pct < MIN_RR:
                 continue
-            out.append(dict(side=side, bar=df["start"].iloc[i].isoformat(), stop_pct=stop_pct, tp_pct=tp_pct, late=(i < n - 1)))
+            out.append(dict(side=side, bar=df["start"].iloc[i].isoformat(), stop_pct=stop_pct, tp_pct=tp_pct, late=(i < n - 1),
+                            color_ok=bool(dd["c"][i] > dd["o"][i])))
     return out
 
 
@@ -385,6 +387,9 @@ def scan(state, frames):
             if key in state["seen"]:
                 continue
             state["seen"][key] = time.time()
+            if REQUIRE_COLOR and not sig["color_ok"]:
+                note(f"⏸ {sym} {sig['side'].upper()} E ignored: the E candle closed against the trade direction (colour rule)")
+                continue
             if os.path.exists(KILL_FILE):
                 note(f"⏸ {sym} {sig['side'].upper()} E ignored: kill file STOP exists")
                 continue

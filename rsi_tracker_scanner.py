@@ -523,6 +523,7 @@ PAPER_FILE = os.environ.get("PAPER_LEDGER", "paper_trades.json")
 PAPER_CSV = os.environ.get("PAPER_CSV", "paper_trades.csv")
 PAPER_MAX_BARS = 50 * 60 // FAST_MIN     # main trade is closed at market after 50 hours
 PAPER_REV_BARS = 100 * 60 // FAST_MIN     # reversal tracked for 100 hours
+PAPER_REQUIRE_COLOR = True     # the E candle must close in the trade direction, otherwise no paper trade
 REV_MODES = ("1R", "2R", "ema20")
 PAPER_FIELDS = ["id", "tf", "ticker", "side", "entry_time_utc", "entry", "stop", "target", "status", "exit", "r",
                 "rev_entry", "rev_stop", "rev_r_1R", "rev_r_2R", "rev_r_ema20"]
@@ -626,6 +627,8 @@ def paper_register(led, name, side, dd, times, i, sign):
     plan = paper_plan(dd, i)
     if plan is None:
         return "\nNo paper trade: no valid stop, or price is already beyond EMA200."
+    if PAPER_REQUIRE_COLOR and not dd["c"][i] > dd["o"][i]:
+        return "\nNo paper trade: the E candle closed against the trade direction (colour rule)."
     rid = f"{name}|{side}|{times[i].isoformat()}"
     if rid not in led:
         led[rid] = dict(id=rid, tf=FAST_TF, name=name, side=side, entry_time=times[i].isoformat(),
