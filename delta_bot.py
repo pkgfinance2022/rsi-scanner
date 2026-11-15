@@ -275,6 +275,21 @@ def open_trade(state, symbol, side, bar, stop_px, tp_px, price, stop_pct, kind, 
     return t
 
 
+def edit_target(sym, pid, new_tp):
+    """Move the take-profit order of an open position. Once the entry order has filled, the bracket is two ordinary
+    stop orders on the position, so the take-profit order is found among the open orders and edited directly."""
+    orders = private("GET", "/v2/orders", dict(product_ids=str(pid), states="open,pending")).get("result") or []
+    tps = [o for o in orders if o.get("stop_order_type") == "take_profit_order"]
+    if not tps:
+        raise RuntimeError("no open take-profit order found: " + json.dumps([(o.get("stop_order_type"), o.get("order_type")) for o in orders]))
+    o = tps[0]
+    body = dict(id=o["id"], product_id=pid, product_symbol=sym, size=int(o["size"]), stop_price=fmt_price(sym, new_tp))
+    if o.get("limit_price"):
+        body["limit_price"] = fmt_price(sym, new_tp)
+    private("PUT", "/v2/orders", body=body)
+    return o
+
+
 def close_market(t, why):
     side = "sell" if t["side"] == "long" else "buy"
     private("POST", "/v2/orders", body=dict(product_id=t["pid"], size=t["size"], side=side, order_type="market_order", reduce_only="true"))
@@ -325,8 +340,7 @@ def manage(state, frames):
                 close_market(t, "the target (EMA200 area) has been reached")
             elif abs(new_tp - t["tp"]) / t["tp"] > 0.0005:
                 try:
-                    private("PUT", "/v2/orders/bracket", body=dict(id=t["order_id"], product_id=t["pid"],
-                            bracket_take_profit_price=fmt_price(sym, new_tp), bracket_stop_trigger_method=TRIGGER))
+                    edit_target(sym, t["pid"], new_tp)
                     t["tp"] = float(fmt_price(sym, new_tp))
                 except Exception as e:
                     print("target update failed:", e)
@@ -432,11 +446,10 @@ def test_order():
     time.sleep(3)
     print("position size:", position_size(pid))
     try:
-        private("PUT", "/v2/orders/bracket", body=dict(id=res.get("id"), product_id=pid,
-                bracket_take_profit_price=fmt_price(sym, vp["last"] * 1.03), bracket_stop_trigger_method=TRIGGER))
-        print("bracket update: ok")
+        o = edit_target(sym, pid, vp["last"] * 1.03)
+        print("target edit: ok (was", o.get("stop_price"), ")")
     except Exception as e:
-        print("bracket update failed:", e)
+        print("target edit failed:", e)
     private("POST", "/v2/orders", body=dict(product_id=pid, size=1, side="sell", order_type="market_order", reduce_only="true"))
     time.sleep(3)
     print("position size after close:", position_size(pid))
@@ -472,12 +485,14 @@ def live_test():
     try:
         time.sleep(3)
         print("position size:", position_size(pid))
+        for o in (private("GET", "/v2/orders", dict(product_ids=str(pid), states="open,pending")).get("result") or []):
+            print("open order:", o.get("id"), o.get("stop_order_type"), o.get("order_type"), "stop_price", o.get("stop_price"),
+                  "limit_price", o.get("limit_price"), "size", o.get("size"), "reduce_only", o.get("reduce_only"))
         try:
-            private("PUT", "/v2/orders/bracket", body=dict(id=res.get("id"), product_id=pid,
-                    bracket_take_profit_price=fmt_price(sym, vp["ask"] * 1.03), bracket_stop_trigger_method=TRIGGER))
-            print("bracket edit: ok")
+            o = edit_target(sym, pid, vp["ask"] * 1.03)
+            print("target edit: ok (was", o.get("stop_price"), ")")
         except Exception as e:
-            print("bracket edit FAILED:", e)
+            print("target edit FAILED:", e)
     finally:
         if position_size(pid) != 0:
             private("POST", "/v2/orders", body=dict(product_id=pid, size=1, side="sell", order_type="market_order", reduce_only="true"))
