@@ -52,3 +52,11 @@ Create a file named `STOP` next to the script to block all new entries (open tra
 * The exact behaviour of editing a bracket on an open position was read from the API reference, not yet seen on a real account. `--test-order` checks it. If it fails the bot keeps the target set at entry.
 * Signals come from Delta's own 15M candles, so they can differ slightly from your TradingView chart and from the Telegram scanner (Yahoo data).
 * Fees and slippage are not in the backtests. Round-trip cost above about 0.1% removes the tested edge.
+
+## Live test without a testnet account
+
+`python delta_bot.py --live-test` places **one real 1-contract BTCUSD order** (about 65 USD of exposure, margin about 6.5 USD at 10x)
+with a 2% bracket, edits the bracket, closes it, cancels any leftover orders and restores your leverage setting.
+It refuses to run unless `DELTA_ENV=live`, `DELTA_DRY_RUN=0` and `DELTA_LIVE_CONFIRM=YES-I-AM-TRADING-REAL-MONEY` are all set,
+and it stops if you already hold a BTCUSD position. Expected cost: fees and spread, a few cents. Worst case: the 2% stop, about 1.3 USD.
+Run `python delta_bot.py --check` first (read-only, also works with DELTA_ENV=live).

@@ -20,6 +20,8 @@ Usage
     python delta_bot.py --once           one pass: manage open trades, then look for a new E (run every minute from cron)
     python delta_bot.py --status         print the trades in the state file
     python delta_bot.py --test-order     TESTNET ONLY: opens and closes 1 BTCUSD contract to prove the API calls work
+    python delta_bot.py --live-test      LIVE: one real BTCUSD contract (about 65 USD of exposure), opened and closed at once.
+                                         Needs DELTA_ENV=live, DELTA_DRY_RUN=0 and the confirmation variable.
 """
 import argparse
 import csv
@@ -440,12 +442,70 @@ def test_order():
     print("position size after close:", position_size(pid))
 
 
+def live_test():
+    """One real 1-contract BTCUSD round trip: proves the signature, the bracket order, the bracket edit, the close and the
+    clean-up on the real account for a few cents of cost. Always tries to leave the account flat."""
+    if ENV != "live" or not LIVE_OK:
+        sys.exit("--live-test needs DELTA_ENV=live and DELTA_LIVE_CONFIRM=YES-I-AM-TRADING-REAL-MONEY")
+    if DRY_RUN:
+        sys.exit("set DELTA_DRY_RUN=0 to send the live test order")
+    sym, lev = "BTCUSD", 10
+    pid = product(sym)["id"]
+    if position_size(pid) != 0:
+        sys.exit("you already have a BTCUSD position: close it first, the test only runs on a flat product")
+    cv = float(product(sym)["contract_value"])
+    vp = venue_price(sym)
+    print(f"1 contract = {cv} BTC = about {vp['ask'] * cv:.2f} USD; margin at {lev}x about {vp['ask'] * cv / lev:.2f} USD; "
+          f"bracket stop/target 2% away")
+    prev = None
+    try:
+        prev = (private("GET", f"/v2/products/{pid}/orders/leverage").get("result") or {}).get("leverage")
+    except Exception as e:
+        print("could not read the current leverage:", e)
+    t0 = time.time()
+    private("POST", f"/v2/products/{pid}/orders/leverage", body=dict(leverage=str(lev)))
+    body = dict(product_id=pid, size=1, side="buy", order_type="market_order",
+                bracket_stop_loss_price=fmt_price(sym, vp["ask"] * 0.98), bracket_take_profit_price=fmt_price(sym, vp["ask"] * 1.02),
+                bracket_stop_trigger_method=TRIGGER)
+    res = private("POST", "/v2/orders", body=body)["result"]
+    print("order placed: id", res.get("id"), "state", res.get("state"), "avg fill", res.get("average_fill_price"), "commission", res.get("paid_commission"))
+    try:
+        time.sleep(3)
+        print("position size:", position_size(pid))
+        try:
+            private("PUT", "/v2/orders/bracket", body=dict(id=res.get("id"), product_id=pid,
+                    bracket_take_profit_price=fmt_price(sym, vp["ask"] * 1.03), bracket_stop_trigger_method=TRIGGER))
+            print("bracket edit: ok")
+        except Exception as e:
+            print("bracket edit FAILED:", e)
+    finally:
+        if position_size(pid) != 0:
+            private("POST", "/v2/orders", body=dict(product_id=pid, size=1, side="sell", order_type="market_order", reduce_only="true"))
+        time.sleep(3)
+        print("position size after close:", position_size(pid), "(must be 0)")
+        for o in (private("GET", "/v2/orders", dict(product_ids=str(pid), states="open,pending")).get("result") or []):
+            try:
+                private("DELETE", "/v2/orders", body=dict(id=o["id"], product_id=pid))
+                print("cancelled leftover order", o["id"], o.get("stop_order_type") or o.get("order_type"))
+            except Exception as e:
+                print("could not cancel leftover order", o.get("id"), e)
+        if prev:
+            try:
+                private("POST", f"/v2/products/{pid}/orders/leverage", body=dict(leverage=str(prev)))
+                print("leverage restored to", prev)
+            except Exception as e:
+                print("could not restore leverage:", e)
+        for f in fills_since(pid, t0):
+            print("fill:", f.get("side"), "size", f.get("size"), "price", f.get("price"), "commission", f.get("commission"))
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--test-order", action="store_true")
+    ap.add_argument("--live-test", action="store_true")
     a = ap.parse_args()
     if a.check:
         check()
@@ -455,5 +515,7 @@ if __name__ == "__main__":
         status()
     elif a.test_order:
         test_order()
+    elif a.live_test:
+        live_test()
     else:
-        sys.exit("use --check, --once, --status or --test-order")
+        sys.exit("use --check, --once, --status, --test-order or --live-test")
