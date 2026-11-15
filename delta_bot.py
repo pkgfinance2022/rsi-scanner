@@ -66,6 +66,7 @@ E_LEVEL = 50.0
 STATE_FILE = os.environ.get("DELTA_STATE", os.path.join(HERE, "delta_state.json"))
 LOG_FILE = os.path.join(HERE, "delta_trades.csv")
 KILL_FILE = os.path.join(HERE, "STOP")
+LOG_TXT = os.path.join(HERE, "delta_bot.log")          # readable history: every signal, order and result, plus one status line per 15M bar
 UA = "rsi-scanner-delta/1.0"
 
 
@@ -103,8 +104,19 @@ def private(method, path, params=None, body=None):
     return _http(method, BASE, path, params, body, auth=True)
 
 
+def log_text(line):
+    try:
+        with open(LOG_TXT, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC | {line}
+")
+    except OSError:
+        pass
+
+
 def note(msg):
     print(msg, flush=True)
+    log_text(msg.replace("
+", " / "))
     try:
         S.send_telegram(msg)
     except BaseException as e:                     # Telegram is optional here
@@ -390,10 +402,14 @@ def scan(state, frames):
     return lines, found
 
 
-def status_line(lines, found):
+def status_line(state, lines, found):
     mode = "DRY RUN" if DRY_RUN else "ORDERS ON"
-    print(f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC | {ENV} {mode} | last closed 15M bar: " + ", ".join(lines)
-          + (f" | {found} E signal(s) on the last 2 bars" if found else " | no new E signal"), flush=True)
+    txt = (f"{ENV} {mode} | last closed 15M bar: " + ", ".join(lines)
+           + (f" | {found} E signal(s) on the last 2 bars" if found else " | no new E signal"))
+    print(f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC | {txt}", flush=True)
+    if state.get("last_status") != ", ".join(lines):        # the log gets one line per new bar, not one per minute
+        state["last_status"] = ", ".join(lines)
+        log_text(txt)
 
 
 def once():
@@ -407,8 +423,8 @@ def once():
     if not DRY_RUN:
         manage(state, frames)
     lines, found = scan(state, frames)
+    status_line(state, lines, found)
     save_state(state)
-    status_line(lines, found)
 
 
 # ---------------------------------------------------------------- tools

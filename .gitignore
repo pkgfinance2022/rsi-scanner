@@ -7,3 +7,4 @@ delta_state.json
 delta_trades.csv
 STOP
 .env
+delta_bot.log
