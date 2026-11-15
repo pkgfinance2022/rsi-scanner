@@ -155,7 +155,7 @@ def mirror(d):
 
 
 # ---------------------------------------------------------------- tracker (port of the Pine state machine)
-def track(d, e_level=None):
+def track(d, e_level=None, e_color=True):
     """Returns (events, final). events: (bar_index, name, level, info). final: state at the last bar."""
     n = len(d["c"])
     e_level = P["lvl1"] if e_level is None else e_level   # RSI level the E recovery must cross (mirrored data: 100 minus the real level)
@@ -275,7 +275,7 @@ def track(d, e_level=None):
                 events.append((i, "B", cur_low, info_at(i)))
         if s2_now:
             events.append((i, "S", np.nan, None))
-        if ready:
+        if ready and (not e_color or c > o):        # E candle must close in the trade direction (green for a buy)
             events.append((i, "E", np.nan, None))
 
     final = dict(state=state, level=cur_low, attempt=attempt, divergence=divergence,
