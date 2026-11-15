@@ -104,6 +104,7 @@ LOOKBACK = {"4H": 4, "D": 3, "W": 2, "15M": 3}   # closed bars to look back each
 FAST_TF, FAST_MIN = "15M", 15      # --fast mode timeframe (was 5M until 2026-11-12)
 FAST_TICKERS = ["BTCUSD", "ETHUSD", "XAUUSD", "SILVER", "NAS100"]   # --fast mode: only these get paper trades (and eToro demo orders) on E
 FAST_SYMBOL = {"NAS100": "NQ=F", "SPX": "ES=F", "DJ30": "YM=F", "RUSSELL2000": "RTY=F"}   # 15-minute data from the near-24h futures instead of the US-hours-only cash index
+E_CROSS = {"15M": 50.0}   # E fires when RSI crosses above this (below 100 minus this for shorts); other timeframes use the BUY level (45 / 55)
 FAST_WATCH = ["BTCUSD", "XRPUSD", "ETHUSD", "SOLUSD",                                   # 15M alerts: the TradingView watchlist
               "GBPUSD", "EURUSD", "USDJPY", "USDCAD", "USDCHF",
               "XAUUSD", "JPN225", "AUDUSD", "NZDUSD", "AUS200", "GER40", "SPX", "UK100", "DJ30", "FRA40", "NAS100",
@@ -154,9 +155,10 @@ def mirror(d):
 
 
 # ---------------------------------------------------------------- tracker (port of the Pine state machine)
-def track(d):
+def track(d, e_level=None):
     """Returns (events, final). events: (bar_index, name, level, info). final: state at the last bar."""
     n = len(d["c"])
+    e_level = P["lvl1"] if e_level is None else e_level   # RSI level the E recovery must cross (mirrored data: 100 minus the real level)
     state = 0
     attempt = 0
     cur_low = cur_rsi_low = prev_low = prev_rsi_low = np.nan
@@ -258,7 +260,7 @@ def track(d):
         # Extreme + recovery
         if rsi <= P["ext"]:
             ext_armed, ext_bar = True, i
-        ready = ext_armed and (rsi > P["lvl1"] and rsi_prev <= P["lvl1"])
+        ready = ext_armed and (rsi > e_level and rsi_prev <= e_level)
         if ready or i - ext_bar > P["ext_window"]:
             ext_armed = False
 
@@ -415,7 +417,7 @@ def message(name, tf, side, ev, level, bar_time, info=None, mtf=None):
             "B": f"B: first buy. Support line (protected low) starts at {lv}",
             "B2": f"B2: retry buy, no divergence. Support line (protected low) at {lv}",
             "S": "S: broke above EMA200, retest held as support",
-            "E": "E: RSI hit the extreme low and is back above 45, be ready",
+            "E": f"E: RSI hit the extreme low and is back above {E_CROSS.get(tf, P['lvl1']):g}, be ready",
             "WATCH": "WATCH: RSI oversold, start watching",
             "FAIL": f"Support line {lv} BROKEN (close below it): setup failed, possible SELL to check",
             "TARGET": f"Price reached EMA200 ({lv}): pull-up target hit, support line ends",
@@ -427,7 +429,7 @@ def message(name, tf, side, ev, level, bar_time, info=None, mtf=None):
             "B": f"S: first sell. Resistance line (protected high) starts at {lv}",
             "B2": f"S2: retry sell, no divergence. Resistance line (protected high) at {lv}",
             "S": "R: broke below EMA200, retest held as resistance",
-            "E": "E: RSI hit the extreme high and is back below 55, be ready",
+            "E": f"E: RSI hit the extreme high and is back below {100 - E_CROSS.get(tf, P['lvl1']):g}, be ready",
             "WATCH": "WATCH: RSI overbought, start watching",
             "FAIL": f"Resistance line {lv} BROKEN (close above it): setup failed, possible BUY to check",
             "TARGET": f"Price reached EMA200 ({lv}): drop target hit, resistance line ends",
@@ -737,7 +739,7 @@ def main():
                 res[tf] = dict(times=times, last=len(bars) - 1, sides={}, dd={})
                 for side, dd in (("long", d), ("short", mirror(d))):
                     res[tf]["dd"][side] = dd
-                    res[tf]["sides"][side] = track(dd)
+                    res[tf]["sides"][side] = track(dd, (E_CROSS[tf] if side == "long" else 100 - E_CROSS[tf]) if tf in E_CROSS else None)
             except SystemExit:
                 raise
             except Exception as e:
