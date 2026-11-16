@@ -244,12 +244,20 @@
   "entry": 3908.39990234375,
   "stop": 3856.699951171875,
   "target": 3969.2070986920685,
-  "status": "open",
-  "exit": null,
-  "r": null,
-  "rev": null,
+  "status": "fail",
+  "exit": 3841.699951171875,
+  "r": -1.290135670537346,
+  "rev": {
+   "entry": 3841.699951171875,
+   "stop": 3927.199951171875,
+   "r": {
+    "1R": null,
+    "2R": null,
+    "ema20": null
+   }
+  },
   "notified": {
-   "main": false,
+   "main": true,
    "rev": false
   }
  },
