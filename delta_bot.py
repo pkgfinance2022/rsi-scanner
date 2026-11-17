@@ -1,11 +1,11 @@
-"""Delta Exchange trader for the 15-minute E strategy (BTC, ETH, gold).
+"""Delta Exchange trader for the E strategy on 4H and Daily bars (BTC, ETH, gold). 15M is still available: DELTA_TIMEFRAMES=15M.
 
 Rule (long; shorts are the mirror image)
-  Entry   market order at the close of a 15M E bar (RSI crossed above 50 after an extreme low)
+  Entry   market order at the close of an E bar (RSI crossed back up through 45 after an extreme low of 22 or less; 50 on 15M)
   Stop    top of the last wick: the lowest low since the RSI extreme (hard stop on the exchange, hit on touch)
   Target  the moving EMA200 minus TARGET_ATR x ATR ("just before 200 EMA"); moved every bar, closed at market when reached
   If the stop is hit: a contra trade in the opposite direction, stop = the extreme the failed trade reached since the E bar, target = CONTRA_R x risk
-  Limits  max hold 50 h (main) / 100 h (contra)
+  Limits  max hold: 4H 60 bars (10 days) main / 120 contra; Daily 40 / 80 bars; 15M 200 / 400 bars
 
 SAFETY (all on by default)
   * DELTA_DRY_RUN=1 (default): signals and order plans are printed / sent to Telegram, nothing is sent to Delta.
@@ -51,6 +51,10 @@ PUBLIC = BASES["live"]                      # market data for the signals (publi
 DRY_RUN = os.environ.get("DELTA_DRY_RUN", "1") != "0"
 LIVE_OK = os.environ.get("DELTA_LIVE_CONFIRM", "") == "YES-I-AM-TRADING-REAL-MONEY"
 
+TFS = [t.strip().upper() for t in os.environ.get("DELTA_TIMEFRAMES", "4H,D").split(",") if t.strip()]
+# Delta resolution, bar length in seconds, max bars held (main trade, contra trade)
+TF_CFG = {"4H": dict(res="4h", secs=14400, main=60, contra=120), "D": dict(res="1d", secs=86400, main=40, contra=80),
+          "15M": dict(res="15m", secs=900, main=200, contra=400)}
 SYMBOLS = [s.strip() for s in os.environ.get("DELTA_SYMBOLS", "BTCUSD,ETHUSD,XAUTUSD").split(",") if s.strip()]
 RISK_USD = float(os.environ.get("DELTA_RISK_USD", "2"))             # money lost if the stop is hit (before fees/slippage)
 MAX_LEVERAGE = int(os.environ.get("DELTA_MAX_LEVERAGE", "10"))
@@ -62,17 +66,21 @@ CONTRA_ON = os.environ.get("DELTA_CONTRA", "1") == "1"
 MIN_RR = float(os.environ.get("DELTA_MIN_RR", "0"))                # skip trades whose target is closer than this many R
 STOP_ROOM_ATR = float(os.environ.get("DELTA_STOP_ROOM_ATR", "0"))      # extra room beyond the wick, in ATR (0 on crypto and gold: tested, no benefit)
 SECOND_ON = os.environ.get("DELTA_SECOND_CHANCE", "0") == "1"         # OFF by default: after a buy reached its target, sell when its protected low breaks later (broader tests show no edge)
-SECOND_WATCH_BARS = 600                                              # watch for 150 h after the E bar
-MIN_GAP_PCT = float(os.environ.get("DELTA_MIN_GAP_PCT", "1.0"))          # EMA20 must be at least this far from EMA200 (% of price): enough room for momentum
+SECOND_WATCH_BARS = 600                                              # watch this many bars after the E bar
+MIN_GAP_PCT = os.environ.get("DELTA_MIN_GAP_PCT")                      # EMA20 must be at least this far from EMA200 (% of price). Default: 1.0 on 15M (tested), 0 on 4H and Daily (not tested there)
 REQUIRE_COLOR = os.environ.get("DELTA_REQUIRE_COLOR", "1") == "1"  # the E candle must close in the trade direction (green for a buy, red for a sell)
 TRIGGER = os.environ.get("DELTA_STOP_TRIGGER", "last_traded_price")  # or mark_price
-MAIN_MAX_BARS, CONTRA_MAX_BARS = 200, 400                          # 15M bars: 50 h and 100 h
-E_LEVEL = 50.0
-EXT = S.EXT_LEVEL["15M"]                                     # RSI extreme that arms E (22 / 78 on 15M)
+def gap_min(tf):
+    return float(MIN_GAP_PCT) if MIN_GAP_PCT is not None else (1.0 if tf == "15M" else 0.0)
+
+
+def e_level(tf):
+    return 50.0 if tf == "15M" else None                        # None = the scanner default (45 for buys, 55 for sells)
+
 STATE_FILE = os.environ.get("DELTA_STATE", os.path.join(HERE, "delta_state.json"))
 LOG_FILE = os.path.join(HERE, "delta_trades.csv")
 KILL_FILE = os.path.join(HERE, "STOP")
-LOG_TXT = os.path.join(HERE, "delta_bot.log")          # readable history: every signal, order and result, plus one status line per 15M bar
+LOG_TXT = os.path.join(HERE, "delta_bot.log")          # readable history: every signal, order and result, plus one status line per new bar
 UA = "rsi-scanner-delta/1.0"
 
 
@@ -152,9 +160,10 @@ def save_state(st):
 
 
 # ---------------------------------------------------------------- market data and signals
-def candles(symbol, bars=700):
+def candles(symbol, tf, bars=700):
+    cfg = TF_CFG[tf]
     end = int(time.time())
-    res = public("/v2/history/candles", dict(resolution="15m", symbol=symbol, start=end - bars * 900, end=end))
+    res = public("/v2/history/candles", dict(resolution=cfg["res"], symbol=symbol, start=end - bars * cfg["secs"], end=end))
     df = pd.DataFrame(res.get("result", []))
     if df.empty:
         return None
@@ -162,7 +171,7 @@ def candles(symbol, bars=700):
     df["start"] = pd.to_datetime(df["time"], unit="s", utc=True)
     df = df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close"}).set_index("start", drop=False)
     df = df[["Open", "High", "Low", "Close", "start"]].astype({"Open": float, "High": float, "Low": float, "Close": float})
-    return df[df["start"] + pd.Timedelta(minutes=15) <= pd.Timestamp.now(tz="UTC")]       # closed bars only
+    return df[df["start"] + pd.Timedelta(seconds=cfg["secs"]) <= pd.Timestamp.now(tz="UTC")]       # closed bars only
 
 
 _prod_cache = {}
@@ -201,16 +210,16 @@ def fmt_price(symbol, x):
     return f"{round(round(x / tick) * tick, dec):.{dec}f}"
 
 
-def find_signals(symbol, df):
+def find_signals(symbol, df, tf):
     """E events on the last two closed bars. Returns plans in percentages so they can be applied to the venue price."""
     d = S.indicators(df)
     n = len(df)
     out = []
     for side, dd in (("long", d), ("short", S.mirror(d))):
-        for i, ev, lvl, info in S.track(dd, E_LEVEL, True, EXT)[0]:
+        for i, ev, lvl, info in S.track(dd, e_level(tf), True, S.EXT_LEVEL[tf])[0]:
             if ev != "E" or i < n - 2:
                 continue
-            plan = S.paper_plan(dd, i, STOP_ROOM_ATR, EXT)
+            plan = S.paper_plan(dd, i, STOP_ROOM_ATR, S.EXT_LEVEL[tf])
             if not plan:
                 continue
             entry = abs(plan["entry"])
@@ -260,20 +269,20 @@ def sizing(symbol, price, stop_pct, risk_usd):
     return size, lev
 
 
-def open_trade(state, symbol, side, bar, stop_px, tp_px, price, stop_pct, kind, parent=None, risk_usd=None, level=None):
+def open_trade(state, symbol, side, bar, stop_px, tp_px, price, stop_pct, kind, parent=None, risk_usd=None, level=None, tf="15M"):
     if product(symbol).get("_live_copy") and not DRY_RUN:
         note(f"⛔ {symbol} is not listed on {ENV}: skipped")
         return None
     pid = product(symbol)["id"]
     size, lev = sizing(symbol, price, stop_pct, risk_usd or RISK_USD)
-    tag = f"{kind} {side.upper()} {symbol}"
+    tag = f"{kind} {side.upper()} {symbol} [{tf}]"
     if size < 1:
         note(f"⛔ {tag}: skipped, risk ${risk_usd or RISK_USD:g} is too small for one contract at this stop distance")
         return None
     if lev < 1:
         note(f"⛔ {tag}: skipped, the stop is too far away ({stop_pct * 100:.1f}%) for a safe leverage")
         return None
-    tid = f"{symbol}|{side}|{bar}|{kind}"
+    tid = f"{symbol}|{tf}|{side}|{bar}|{kind}"
     plan = (f"{tag} | size {size} contracts x{lev} | entry about {fmt_price(symbol, price)} | stop {fmt_price(symbol, stop_px)} "
             f"({stop_pct * 100:.2f}%) | target {fmt_price(symbol, tp_px)} | risk about ${risk_usd or RISK_USD:g}")
     if DRY_RUN:
@@ -286,7 +295,7 @@ def open_trade(state, symbol, side, bar, stop_px, tp_px, price, stop_pct, kind, 
     res = private("POST", "/v2/orders", body=body)["result"]
     t = dict(id=tid, kind=kind, symbol=symbol, side=side, pid=pid, size=size, order_id=res.get("id"), opened=time.time(),
              stop=float(fmt_price(symbol, stop_px)), tp=float(fmt_price(symbol, tp_px)), stop_pct=stop_pct, status="open",
-             entry=None, parent=parent, bar=bar, level=level)
+             entry=None, parent=parent, bar=bar, level=level, tf=tf)
     state["trades"][tid] = t
     note(f"✅ DELTA {ENV.upper()} order placed: {plan}")
     log_row(id=tid, kind=kind, symbol=symbol, side=side, size=size, stop=t["stop"], target=t["tp"], result="opened")
@@ -318,14 +327,16 @@ def second_chance(state, t, frames):
     """A main trade that ended at its TARGET: keep watching its protected low (the level in candle prices). The first bar
     that trades through it opens a trade the other way: stop = the extreme reached since the E bar, target CONTRA_R x risk."""
     sym, sign = t["symbol"], 1 if t["side"] == "long" else -1
-    df = frames.get(sym)
+    tf = t.get("tf", "15M")
+    secs = TF_CFG[tf]["secs"]
+    df = frames.get((sym, tf))
     if df is None or t.get("level") is None or t.get("closed_at") is None:
         return
     e_bar = pd.Timestamp(t["bar"])
-    if pd.Timestamp.now(tz="UTC") - e_bar > pd.Timedelta(minutes=15 * SECOND_WATCH_BARS):
+    if pd.Timestamp.now(tz="UTC") - e_bar > pd.Timedelta(seconds=secs * SECOND_WATCH_BARS):
         t["second_done"] = True
         return
-    since = df[df["start"] >= pd.Timestamp(t["closed_at"], unit="s", tz="UTC").floor("15min")]
+    since = df[df["start"] >= pd.Timestamp(t["closed_at"], unit="s", tz="UTC").floor(f"{secs}s")]
     broke = since[since["Low"] <= t["level"]] if sign > 0 else since[since["High"] >= t["level"]]
     if broke.empty:
         return
@@ -346,7 +357,7 @@ def second_chance(state, t, frames):
     side2 = "short" if sign > 0 else "long"
     note(f"🔁 {sym} second chance: the protected low of the earlier {t['side'].upper()} trade broke after it reached its target")
     t["second_done"] = True
-    open_trade(state, sym, side2, t["bar"], price * (1 + sign * r2_pct), price * (1 - sign * CONTRA_R * r2_pct), price, r2_pct, "second", parent=t["id"])
+    open_trade(state, sym, side2, t["bar"], price * (1 + sign * r2_pct), price * (1 - sign * CONTRA_R * r2_pct), price, r2_pct, "second", parent=t["id"], tf=tf)
 
 
 def manage(state, frames):
@@ -358,7 +369,8 @@ def manage(state, frames):
         if t["status"] != "open":
             continue
         sym, sign = t["symbol"], 1 if t["side"] == "long" else -1
-        age_bars = (time.time() - t["opened"]) / 900
+        tf = t.get("tf", "15M")
+        age_bars = (time.time() - t["opened"]) / TF_CFG[tf]["secs"]
         pos = position_size(t["pid"])
         if pos == 0 and time.time() - t["opened"] > 90:
             fills = fills_since(t["pid"], t["opened"])
@@ -379,7 +391,7 @@ def manage(state, frames):
             if t["kind"] == "main" and res == "stop" and CONTRA_ON:
                 side2 = "short" if t["side"] == "long" else "long"
                 ext = entry                                   # contra stop = the extreme the failed trade reached since the E bar
-                df = frames.get(sym)
+                df = frames.get((sym, tf))
                 if df is not None:
                     since = df[df["start"] >= pd.Timestamp(t["bar"])]
                     if len(since):
@@ -387,17 +399,17 @@ def manage(state, frames):
                 s2 = max(ext, entry) if sign > 0 else min(ext, entry)
                 r2 = abs(s2 - exit_)
                 tp2 = exit_ - sign * CONTRA_R * r2
-                open_trade(state, sym, side2, t["bar"], s2, tp2, exit_, r2 / exit_, "contra", parent=t["id"])
+                open_trade(state, sym, side2, t["bar"], s2, tp2, exit_, r2 / exit_, "contra", parent=t["id"], tf=tf)
             continue
         if pos == 0:
             continue                                         # order placed a moment ago, not filled yet
-        limit = MAIN_MAX_BARS if t["kind"] == "main" else CONTRA_MAX_BARS
+        limit = TF_CFG[tf]["main"] if t["kind"] == "main" else TF_CFG[tf]["contra"]
         if age_bars >= limit:
-            close_market(t, f"time limit {limit * 15 // 60} h")
+            close_market(t, f"time limit {limit} {tf} bars")
             continue
-        if t["kind"] == "main" and sym in frames:
+        if t["kind"] == "main" and (sym, tf) in frames:
             vp = venue_price(sym)
-            new_tp = vp["last"] * (1 + sign * target_pct_now(frames[sym], t["side"]))
+            new_tp = vp["last"] * (1 + sign * target_pct_now(frames[(sym, tf)], t["side"]))
             if sign * (new_tp - vp["last"]) <= vp["last"] * 0.0003:
                 close_market(t, "the target (EMA200 area) has been reached")
             elif abs(new_tp - t["tp"]) / t["tp"] > 0.0005:
@@ -419,48 +431,49 @@ def realized_today(state):
 
 def scan(state, frames):
     lines, found = [], 0
-    for sym in SYMBOLS:
-        df = frames.get(sym)
-        if df is None or len(df) < 260:
-            print(f"{sym}: not enough candles")
+    for sym, tf in [(a, b) for a in SYMBOLS for b in TFS]:
+        df = frames.get((sym, tf))
+        if df is None or len(df) < 230:
+            print(f"{sym} {tf}: not enough candles ({0 if df is None else len(df)}, need 230 for the EMA200)")
             continue
-        lines.append(f"{sym} bar {df['start'].iloc[-1]:%H:%M}")
-        for sig in find_signals(sym, df):
+        lines.append(f"{sym} {tf} bar {df['start'].iloc[-1]:%m-%d %H:%M}")
+        for sig in find_signals(sym, df, tf):
             found += 1
-            key = f"{sym}|{sig['side']}|{sig['bar']}"
+            key = f"{sym}|{tf}|{sig['side']}|{sig['bar']}"
             if key in state["seen"]:
                 continue
             state["seen"][key] = time.time()
-            if sig["gap_pct"] < MIN_GAP_PCT:
-                note(f"⏸ {sym} {sig['side'].upper()} E ignored: EMA20 is only {sig['gap_pct']:.2f}% from EMA200 (minimum {MIN_GAP_PCT:g}%)")
+            sym_tf = f"{sym} [{tf}]"
+            if sig["gap_pct"] < gap_min(tf):
+                note(f"⏸ {sym_tf} {sig['side'].upper()} E ignored: EMA20 is only {sig['gap_pct']:.2f}% from EMA200 (minimum {gap_min(tf):g}%)")
                 continue
             if REQUIRE_COLOR and not sig["color_ok"]:
-                note(f"⏸ {sym} {sig['side'].upper()} E ignored: the E candle closed against the trade direction (colour rule)")
+                note(f"⏸ {sym_tf} {sig['side'].upper()} E ignored: the E candle closed against the trade direction (colour rule)")
                 continue
             if os.path.exists(KILL_FILE):
-                note(f"⏸ {sym} {sig['side'].upper()} E ignored: kill file STOP exists")
+                note(f"⏸ {sym_tf} {sig['side'].upper()} E ignored: kill file STOP exists")
                 continue
             if sum(1 for t in state["trades"].values() if t["status"] == "open") >= MAX_OPEN:
-                note(f"⏸ {sym} {sig['side'].upper()} E ignored: {MAX_OPEN} trades already open")
+                note(f"⏸ {sym_tf} {sig['side'].upper()} E ignored: {MAX_OPEN} trades already open")
                 continue
             if realized_today(state) <= -DAILY_LOSS_USD:
-                note(f"⏸ {sym} {sig['side'].upper()} E ignored: daily loss limit reached")
+                note(f"⏸ {sym_tf} {sig['side'].upper()} E ignored: daily loss limit reached")
                 continue
             if sig["late"]:
-                note(f"⏸ {sym} {sig['side'].upper()} E ignored: the signal bar is more than one bar old")
+                note(f"⏸ {sym_tf} {sig['side'].upper()} E ignored: the signal bar is more than one bar old")
                 continue
             vp = venue_price(sym)
             long_ = sig["side"] == "long"
             price = vp["ask"] if long_ else vp["bid"]
             sign = 1 if long_ else -1
             open_trade(state, sym, sig["side"], sig["bar"], price * (1 - sign * sig["stop_pct"]),
-                       price * (1 + sign * sig["tp_pct"]), price, sig["stop_pct"], "main", level=sig["level"])
+                       price * (1 + sign * sig["tp_pct"]), price, sig["stop_pct"], "main", level=sig["level"], tf=tf)
     return lines, found
 
 
 def status_line(state, lines, found):
     mode = "DRY RUN" if DRY_RUN else "ORDERS ON"
-    txt = (f"{ENV} {mode} | last closed 15M bar: " + ", ".join(lines)
+    txt = (f"{ENV} {mode} | last closed bars: " + ", ".join(lines)
            + (f" | {found} E signal(s) on the last 2 bars" if found else " | no new E signal"))
     print(f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC | {txt}", flush=True)
     if state.get("last_status") != ", ".join(lines):        # the log gets one line per new bar, not one per minute
@@ -472,10 +485,11 @@ def once():
     state = load_state()
     frames = {}
     for sym in SYMBOLS:
-        try:
-            frames[sym] = candles(sym)
-        except Exception as e:
-            print(f"{sym}: candles failed: {e}")
+        for tf in TFS:
+            try:
+                frames[(sym, tf)] = candles(sym, tf)
+            except Exception as e:
+                print(f"{sym} {tf}: candles failed: {e}")
     if not DRY_RUN:
         manage(state, frames)
     lines, found = scan(state, frames)
@@ -486,7 +500,7 @@ def once():
 # ---------------------------------------------------------------- tools
 def check():
     print(f"env={ENV} base={BASE} dry_run={DRY_RUN} live_confirmed={LIVE_OK}")
-    print(f"symbols={SYMBOLS} risk=${RISK_USD:g}/trade max_leverage={MAX_LEVERAGE} max_open={MAX_OPEN} daily_loss=${DAILY_LOSS_USD:g} "
+    print(f"timeframes={TFS} symbols={SYMBOLS} risk=${RISK_USD:g}/trade max_leverage={MAX_LEVERAGE} max_open={MAX_OPEN} daily_loss=${DAILY_LOSS_USD:g} "
           f"target={TARGET_ATR} ATR before EMA200 contra={CONTRA_ON} ({CONTRA_R}R) min_rr={MIN_RR} trigger={TRIGGER}")
     for sym in SYMBOLS:
         p = product(sym)
