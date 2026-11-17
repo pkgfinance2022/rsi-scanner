@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   scan:
+    if: false   # 15M scan switched off (back to 4H and Daily only); delete this line to turn it back on
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
