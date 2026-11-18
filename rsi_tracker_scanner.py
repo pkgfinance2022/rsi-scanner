@@ -114,6 +114,9 @@ FAST_WATCH = ["BTCUSD", "XRPUSD", "ETHUSD", "SOLUSD",                           
               "SILVER", "COPPER", "ALUMINIUM", "RUSSELL2000", "NL25", "IT40", "USOIL",
               "NIFTY50", "BANKNIFTY"]
 DEMO_EVENTS = {"B+D", "S", "E"}
+# K = a squeeze ("coil"): same rule as rsi_coil_k_v1.pine. It says nothing about direction. Sent for these timeframes only.
+COIL = dict(rsi_lo=40.0, rsi_hi=60.0, rank_len=100, rank_max=25.0, gap_atr=1.5, near_atr=1.0, min_bars=3, cool=20)
+COIL_TFS = ("4H", "D")
 DIGEST_HOUR_UTC = 6                  # daily "what's active" summary is sent by the first run at/after this UTC hour
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(HERE, "scanner_state.json")
@@ -146,6 +149,37 @@ def indicators(df):
         emaf=ema(c, P["fast"]).values, emas=ema(c, P["slow"]).values,
         emam=ema(c, P["mid"]).values, atr=rma(tr, P["atr_len"]).values,
     )
+
+
+def coil_events(d):
+    """K events: the first bar of each squeeze. A squeeze bar needs ALL of: ATR in the lowest rank_max percent of the last
+    rank_len bars, |EMA20-EMA200| <= gap_atr x ATR, RSI between rsi_lo and rsi_hi, |close-EMA200| <= near_atr x ATR.
+    It is drawn once it has lasted min_bars bars, and not again for cool bars. Returns [(i, atr_rank, gap_atr, dist_atr, rsi)]."""
+    c, atr, rl = d["c"], d["atr"], COIL["rank_len"]
+    out, run, last = [], 0, -10 ** 9
+    for i in range(len(c)):
+        a = atr[i]
+        if i < max(P["slow"], rl) or not (a > 0):
+            run = 0
+            continue
+        rank = 100.0 * float(np.sum(atr[i - rl:i] <= a)) / rl      # Pine percentrank: share of the previous rl bars at or below today
+        gap = abs(d["emaf"][i] - d["emas"][i]) / a
+        dist = abs(c[i] - d["emas"][i]) / a
+        rsi = d["rsi"][i]
+        hit = (rank <= COIL["rank_max"] and gap <= COIL["gap_atr"] and COIL["rsi_lo"] <= rsi <= COIL["rsi_hi"]
+               and dist <= COIL["near_atr"])
+        run = run + 1 if hit else 0
+        if run == COIL["min_bars"] and i - last > COIL["cool"]:
+            out.append((i, rank, gap, dist, float(rsi)))
+            last = i
+    return out
+
+
+def coil_message(name, tf, bar_time, rank, gap, dist, rsi, price):
+    when = f"{bar_time:%Y-%m-%d %H:%M} UTC" if tf == "4H" else f"{bar_time:%Y-%m-%d}"
+    return (f"🟦 {name} {tf} | K: the market is squeezed around EMA200, a bigger move may be near (direction unknown). (bar {when})\n"
+            f"Price {fmt(price)} | ATR in the lowest {rank:.0f}% of the last {COIL['rank_len']} bars | EMA20-EMA200 gap {gap:.1f} ATR | RSI {rsi:.0f}\n"
+            f"Nothing to trade yet: watch for B, E, B+D or a close beyond the recent range to see the direction.")
 
 
 def mirror(d):
@@ -868,6 +902,27 @@ def main():
                             reward_risk=f"{info['rr']:.2f}" if info and ok(info["rr"]) else "",
                             score=info["score"] if info else "",
                             same_side_status=" ".join(f"{k}:{v}" for k, v in status.items())))
+
+        if not args.fast and not args.demo:
+            for tf in res:
+                if tf not in COIL_TFS:
+                    continue
+                times, last = res[tf]["times"], res[tf]["last"]
+                lookback = args.lookback or LOOKBACK[tf]
+                for i, rank, gap, dist, rsi in coil_events(res[tf]["dd"]["long"]):
+                    if i < last - lookback + 1:
+                        continue
+                    key, bar_iso = f"{name}|{tf}|K", times[i].isoformat()
+                    if state.get(key) == bar_iso:
+                        continue
+                    msg = coil_message(name, tf, times[i], rank, gap, dist, rsi, float(res[tf]["dd"]["long"]["c"][i]))
+                    print(msg)
+                    if not args.dry_run:
+                        send_telegram(msg)
+                        state[key] = bar_iso
+                        sent += 1
+                        append_log(dict(sent_utc=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"), ticker=name, timeframe=tf,
+                                        side="-", event="K", bar_time_utc=bar_iso, price=fmt(float(res[tf]["dd"]["long"]["c"][i]))))
 
         if args.fast and FAST_TF in res:
             for side in ("long", "short"):
