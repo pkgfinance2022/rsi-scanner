@@ -116,7 +116,7 @@ FAST_WATCH = ["BTCUSD", "XRPUSD", "ETHUSD", "SOLUSD",                           
 DEMO_EVENTS = {"B+D", "S", "E"}
 # K = a squeeze ("coil"): same rule as rsi_coil_k_v1.pine. It says nothing about direction. Sent for these timeframes only.
 COIL = dict(rsi_lo=40.0, rsi_hi=60.0, rank_len=100, rank_max=25.0, gap_atr=1.5, near_atr=1.0, min_bars=3, cool=20)
-COIL_TFS = ("4H", "D")
+COIL_TFS = ()     # K alerts switched OFF (2026-11-18: tested as noise, no edge). Set ("4H", "D") to turn them back on.
 DIGEST_HOUR_UTC = 6                  # daily "what's active" summary is sent by the first run at/after this UTC hour
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(HERE, "scanner_state.json")
