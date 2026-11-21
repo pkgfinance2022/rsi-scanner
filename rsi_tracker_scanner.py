@@ -117,7 +117,12 @@ DEMO_EVENTS = {"B+D", "S", "E"}
 # K = a squeeze ("coil"): same rule as rsi_coil_k_v1.pine. It says nothing about direction. Sent for these timeframes only.
 COIL = dict(rsi_lo=40.0, rsi_hi=60.0, rank_len=100, rank_max=25.0, gap_atr=1.5, near_atr=1.0, min_bars=3, cool=20)
 COIL_TFS = ()     # K alerts switched OFF (2026-11-18: tested as noise, no edge). Set ("4H", "D") to turn them back on.
-DIGEST_HOUR_UTC = 6                  # daily "what's active" summary is sent by the first run at/after this UTC hour
+# C = confirmation: after an RSI extreme (same level as E) a CLOSE beyond the EMA100 by margin x ATR in the trade direction (candle in that direction too),
+# first one per setup. Same rule as rsi_e100_confirm_v1.pine. Sent for these timeframes and instruments only. Set C_TFS = () to turn it off.
+CONF = dict(ema=100, margin=0.5, win=60)
+C_TFS = ("4H",)
+C_NAMES = ["NIFTY50", "BANKNIFTY", "SPX", "NAS100", "DJ30", "RUSSELL2000", "GER40", "FRA40", "UK100", "JPN225", "NL25", "IT40"]
+DIGEST_HOUR_UTC = 6                 # daily "what's active" summary is sent by the first run at/after this UTC hour
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE = os.path.join(HERE, "scanner_state.json")
 LOG_FILE = os.environ.get("ALERT_LOG", os.path.join(HERE, "alert_log.csv"))
@@ -180,6 +185,40 @@ def coil_message(name, tf, bar_time, rank, gap, dist, rsi, price):
     return (f"🟦 {name} {tf} | K: the market is squeezed around EMA200, a bigger move may be near (direction unknown). (bar {when})\n"
             f"Price {fmt(price)} | ATR in the lowest {rank:.0f}% of the last {COIL['rank_len']} bars | EMA20-EMA200 gap {gap:.1f} ATR | RSI {rsi:.0f}\n"
             f"Nothing to trade yet: watch for B, E, B+D or a close beyond the recent range to see the direction.")
+
+
+def conf_events(dd, ext_level):
+    """C events on one side (dd = long frame, or the mirrored frame for the short side). Returns [(i, stop, ema100)]: stop = lowest low
+    since the RSI extreme (in this frame), ema100 = the confirmation line at bar i."""
+    c, o, l, atr, rsi = dd["c"], dd["o"], dd["l"], dd["atr"], dd["rsi"]
+    e100 = ema(pd.Series(c), CONF["ema"]).values
+    m, win = CONF["margin"], CONF["win"]
+    out, ext, used = [], None, set()
+    for i in range(max(P["slow"], 2), len(c)):
+        if rsi[i] <= ext_level:
+            ext = i
+        if ext is None or i - ext > win or not (atr[i] > 0 and atr[i - 1] > 0):
+            continue
+        if ext in used:
+            continue
+        if c[i] > e100[i] + m * atr[i] and c[i - 1] <= e100[i - 1] + m * atr[i - 1] and c[i] > o[i]:
+            used.add(ext)
+            out.append((i, float(np.min(l[ext:i + 1])), float(e100[i])))
+    return out
+
+
+def conf_message(name, tf, side, bar_time, price, ema100, ema200, atr, stop):
+    when = f"{bar_time:%Y-%m-%d %H:%M} UTC" if tf == "4H" else f"{bar_time:%Y-%m-%d}"
+    up = side == "long"
+    sign = 1 if up else -1
+    tgt = ema200 - sign * 0.5 * atr           # EMA200 -/+ 0.5 ATR
+    room = (tgt - price) * sign
+    risk = (price - stop) * sign
+    rr = f"{room / risk:.1f}R from here" if risk > 0 and room > 0.05 * risk else "already reached or almost there"
+    word = "above" if up else "below"
+    return (f"{'🟩' if up else '🟥'} {name} {tf} {side.upper()} | C: confirmation, closed convincingly {word} EMA100 after an RSI extreme. (bar {when})\n"
+            f"Price {fmt(price)} | EMA100 {fmt(ema100)} | stop idea {fmt(stop)} | EMA200 target {fmt(tgt)} ({rr})\n"
+            f"Meant as a confirmation for an E trade you already have (stay in). As a late new entry it tested no better than E.")
 
 
 def mirror(d):
@@ -923,6 +962,31 @@ def main():
                         sent += 1
                         append_log(dict(sent_utc=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"), ticker=name, timeframe=tf,
                                         side="-", event="K", bar_time_utc=bar_iso, price=fmt(float(res[tf]["dd"]["long"]["c"][i]))))
+
+        if not args.fast and not args.demo and name in C_NAMES:
+            for tf in res:
+                if tf not in C_TFS:
+                    continue
+                times, last = res[tf]["times"], res[tf]["last"]
+                lookback = args.lookback or LOOKBACK[tf]
+                for side in ("long", "short"):
+                    sign = 1 if side == "long" else -1
+                    dd = res[tf]["dd"][side]
+                    for i, stop, e100 in conf_events(dd, EXT_LEVEL.get(tf, P["ext"])):
+                        if i < last - lookback + 1:
+                            continue
+                        key, bar_iso = f"{name}|{tf}|{side}|C", times[i].isoformat()
+                        if state.get(key) == bar_iso:
+                            continue
+                        msg = conf_message(name, tf, side, times[i], sign * float(dd["c"][i]), sign * e100,
+                                           sign * float(dd["emas"][i]), float(dd["atr"][i]), sign * stop)
+                        print(msg)
+                        if not args.dry_run:
+                            send_telegram(msg)
+                            state[key] = bar_iso
+                            sent += 1
+                            append_log(dict(sent_utc=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"), ticker=name, timeframe=tf,
+                                            side=side, event="C", bar_time_utc=bar_iso, price=fmt(sign * float(dd["c"][i]))))
 
         if args.fast and FAST_TF in res:
             for side in ("long", "short"):
