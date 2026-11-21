@@ -119,7 +119,8 @@ COIL = dict(rsi_lo=40.0, rsi_hi=60.0, rank_len=100, rank_max=25.0, gap_atr=1.5, 
 COIL_TFS = ()     # K alerts switched OFF (2026-11-18: tested as noise, no edge). Set ("4H", "D") to turn them back on.
 # C = confirmation: after an RSI extreme (same level as E) a CLOSE beyond the EMA100 by margin x ATR in the trade direction (candle in that direction too),
 # first one per setup. Same rule as rsi_e100_confirm_v1.pine. Sent for these timeframes and instruments only. Set C_TFS = () to turn it off.
-CONF = dict(ema=100, margin=0.5, win=60)
+# Settings are the same as the DEFAULTS of rsi_e100_confirm_v1.pine (RSI 14 on close, 25 / 75, 40 bars) so the chart marks and the alerts agree.
+CONF = dict(ema=100, margin=0.5, win=40, rsi_len=14, lo=25.0)
 C_TFS = ("4H",)
 C_NAMES = ["NIFTY50", "BANKNIFTY", "SPX", "NAS100", "DJ30", "RUSSELL2000", "GER40", "FRA40", "UK100", "JPN225", "NL25", "IT40"]
 DIGEST_HOUR_UTC = 6                 # daily "what's active" summary is sent by the first run at/after this UTC hour
@@ -187,23 +188,28 @@ def coil_message(name, tf, bar_time, rank, gap, dist, rsi, price):
             f"Nothing to trade yet: watch for B, E, B+D or a close beyond the recent range to see the direction.")
 
 
-def conf_events(dd, ext_level):
-    """C events on one side (dd = long frame, or the mirrored frame for the short side). Returns [(i, stop, ema100)]: stop = lowest low
-    since the RSI extreme (in this frame), ema100 = the confirmation line at bar i."""
-    c, o, l, atr, rsi = dd["c"], dd["o"], dd["l"], dd["atr"], dd["rsi"]
-    e100 = ema(pd.Series(c), CONF["ema"]).values
-    m, win = CONF["margin"], CONF["win"]
-    out, ext, used = [], None, set()
+def conf_events(dd):
+    """C events on one side (dd = long frame, or the mirrored frame for the short side). Same logic as rsi_e100_confirm_v1.pine.
+    Returns [(i, stop, ema100)]: stop = lowest low of the setup (in this frame), ema100 = the confirmation line at bar i."""
+    c, o, l, atr = dd["c"], dd["o"], dd["l"], dd["atr"]
+    s = pd.Series(c)
+    dlt = s.diff()
+    up, dn = rma(dlt.clip(lower=0), CONF["rsi_len"]), rma((-dlt).clip(lower=0), CONF["rsi_len"])
+    rsi = (100 - 100 / (1 + up / dn)).values                    # RSI on the close (mirrored frame: 100 - RSI, so "low" = the sell-side extreme)
+    e100 = ema(s, CONF["ema"]).values
+    m, win, lo = CONF["margin"], CONF["win"], CONF["lo"]
+    out, low_bar, low_since, done = [], -10 ** 9, np.nan, False
     for i in range(max(P["slow"], 2), len(c)):
-        if rsi[i] <= ext_level:
-            ext = i
-        if ext is None or i - ext > win or not (atr[i] > 0 and atr[i - 1] > 0):
-            continue
-        if ext in used:
-            continue
-        if c[i] > e100[i] + m * atr[i] and c[i - 1] <= e100[i - 1] + m * atr[i - 1] and c[i] > o[i]:
-            used.add(ext)
-            out.append((i, float(np.min(l[ext:i + 1])), float(e100[i])))
+        if rsi[i] <= lo:
+            fresh = i - low_bar > win
+            low_since = l[i] if fresh else min(low_since, l[i])
+            done = False if fresh else done
+            low_bar = i
+        elif i - low_bar <= win:
+            low_since = min(low_since, l[i])
+        if i - low_bar <= win and not done and c[i] > e100[i] + m * atr[i] and c[i - 1] <= e100[i - 1] + m * atr[i - 1] and c[i] > o[i]:
+            done = True
+            out.append((i, float(low_since), float(e100[i])))
     return out
 
 
@@ -972,7 +978,7 @@ def main():
                 for side in ("long", "short"):
                     sign = 1 if side == "long" else -1
                     dd = res[tf]["dd"][side]
-                    for i, stop, e100 in conf_events(dd, EXT_LEVEL.get(tf, P["ext"])):
+                    for i, stop, e100 in conf_events(dd):
                         if i < last - lookback + 1:
                             continue
                         key, bar_iso = f"{name}|{tf}|{side}|C", times[i].isoformat()
