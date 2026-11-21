@@ -119,9 +119,10 @@ COIL = dict(rsi_lo=40.0, rsi_hi=60.0, rank_len=100, rank_max=25.0, gap_atr=1.5, 
 COIL_TFS = ()     # K alerts switched OFF (2026-11-18: tested as noise, no edge). Set ("4H", "D") to turn them back on.
 # C = confirmation: after an RSI extreme (same level as E) a CLOSE beyond the EMA100 by margin x ATR in the trade direction (candle in that direction too),
 # first one per setup. Same rule as rsi_e100_confirm_v1.pine. Sent for these timeframes and instruments only. Set C_TFS = () to turn it off.
-# Settings are the same as the DEFAULTS of rsi_e100_confirm_v1.pine (RSI 14 on close, 25 / 75, 40 bars) so the chart marks and the alerts agree.
-CONF = dict(ema=100, margin=0.5, win=40, rsi_len=14, lo=25.0)
-C_TFS = ("4H",)
+# C needs a SYMPTOM from the tracker on the same side: the green / red line is on the chart, or an E fired within the last `win` bars.
+# Same rule as the C block in rsi_setup_tracker_1h_v4.pine / rsi_setup_tracker_short_1h_v4.pine (what you see on the chart is what is sent).
+CONF = dict(ema=100, margin=0.5, win=40)
+C_TFS = ("4H", "D", "W")
 C_NAMES = ["NIFTY50", "BANKNIFTY", "SPX", "NAS100", "DJ30", "RUSSELL2000", "GER40", "FRA40", "UK100", "JPN225", "NL25", "IT40"]
 DIGEST_HOUR_UTC = 6                 # daily "what's active" summary is sent by the first run at/after this UTC hour
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -188,32 +189,37 @@ def coil_message(name, tf, bar_time, rank, gap, dist, rsi, price):
             f"Nothing to trade yet: watch for B, E, B+D or a close beyond the recent range to see the direction.")
 
 
-def conf_events(dd):
-    """C events on one side (dd = long frame, or the mirrored frame for the short side). Same logic as rsi_e100_confirm_v1.pine.
-    Returns [(i, stop, ema100)]: stop = lowest low of the setup (in this frame), ema100 = the confirmation line at bar i."""
+def conf_events(dd, events, final):
+    """C events on one side (dd = long frame, or the mirrored frame for the short side). events, final = the output of track() for that side.
+    A symptom is on at bar i when the tracker line is on the chart (state 2 at the end of the bar) or an E fired within the last `win` bars.
+    C = the first CLOSE beyond the EMA100 by margin x ATR (candle in the trade direction) while a symptom is on; one per symptom episode.
+    Returns [(i, stop, ema100, reason)]: stop = the protected line if it is on, else the lowest low of the last `win` bars (in this frame)."""
     c, o, l, atr = dd["c"], dd["o"], dd["l"], dd["atr"]
-    s = pd.Series(c)
-    dlt = s.diff()
-    up, dn = rma(dlt.clip(lower=0), CONF["rsi_len"]), rma((-dlt).clip(lower=0), CONF["rsi_len"])
-    rsi = (100 - 100 / (1 + up / dn)).values                    # RSI on the close (mirrored frame: 100 - RSI, so "low" = the sell-side extreme)
-    e100 = ema(s, CONF["ema"]).values
-    m, win, lo = CONF["margin"], CONF["win"], CONF["lo"]
-    out, low_bar, low_since, done = [], -10 ** 9, np.nan, False
-    for i in range(max(P["slow"], 2), len(c)):
-        if rsi[i] <= lo:
-            fresh = i - low_bar > win
-            low_since = l[i] if fresh else min(low_since, l[i])
-            done = False if fresh else done
-            low_bar = i
-        elif i - low_bar <= win:
-            low_since = min(low_since, l[i])
-        if i - low_bar <= win and not done and c[i] > e100[i] + m * atr[i] and c[i - 1] <= e100[i - 1] + m * atr[i - 1] and c[i] > o[i]:
+    n = len(c)
+    e100 = ema(pd.Series(c), CONF["ema"]).values
+    m, win = CONF["margin"], CONF["win"]
+    e_bars = [i for i, ev, _, _ in events if ev == "E"]
+    states, levels = final["states"], final["levels"]
+    out, done, e_ptr, last_e = [], False, 0, -10 ** 9
+    for i in range(n):
+        while e_ptr < len(e_bars) and e_bars[e_ptr] <= i:
+            last_e = e_bars[e_ptr]
+            e_ptr += 1
+        line_on = states[i] == 2
+        sym = line_on or (i - last_e <= win)
+        if not sym:
+            done = False
+            continue
+        if i < max(P["slow"], 2) or done:
+            continue
+        if c[i] > e100[i] + m * atr[i] and c[i - 1] <= e100[i - 1] + m * atr[i - 1] and c[i] > o[i]:
             done = True
-            out.append((i, float(low_since), float(e100[i])))
+            stop = float(levels[i]) if line_on else float(np.min(l[max(0, i - win):i + 1]))
+            out.append((i, stop, float(e100[i]), "line" if line_on else "E"))
     return out
 
 
-def conf_message(name, tf, side, bar_time, price, ema100, ema200, atr, stop):
+def conf_message(name, tf, side, bar_time, price, ema100, ema200, atr, stop, reason="line"):
     when = f"{bar_time:%Y-%m-%d %H:%M} UTC" if tf == "4H" else f"{bar_time:%Y-%m-%d}"
     up = side == "long"
     sign = 1 if up else -1
@@ -222,7 +228,8 @@ def conf_message(name, tf, side, bar_time, price, ema100, ema200, atr, stop):
     risk = (price - stop) * sign
     rr = f"{room / risk:.1f}R from here" if risk > 0 and room > 0.05 * risk else "already reached or almost there"
     word = "above" if up else "below"
-    return (f"{'🟩' if up else '🟥'} {name} {tf} {side.upper()} | C: confirmation, closed convincingly {word} EMA100 after an RSI extreme. (bar {when})\n"
+    sym = (f"the {'green' if up else 'red'} line is on the chart" if reason == "line" else f"an E fired in the last {CONF['win']} bars")
+    return (f"{'🟩' if up else '🟥'} {name} {tf} {side.upper()} | C: confirmation, closed convincingly {word} EMA100 while {sym}. (bar {when})\n"
             f"Price {fmt(price)} | EMA100 {fmt(ema100)} | stop idea {fmt(stop)} | EMA200 target {fmt(tgt)} ({rr})\n"
             f"Meant as a confirmation for an E trade you already have (stay in). As a late new entry it tested no better than E.")
 
@@ -256,6 +263,8 @@ def track(d, e_level=None, e_color=True, ext_level=None):
     ext_bar = 0
     prev_cond = False
     events = []
+    states = np.zeros(n, dtype=int)         # state at the END of each bar (2 = the green / red line is on the chart)
+    levels = np.full(n, np.nan)             # the protected low / high at the end of each bar
 
     def info_at(i):
         """Risk, EMA200 room and the 0-5 quality score (same checklist as the Pine line colour)."""
@@ -360,8 +369,10 @@ def track(d, e_level=None, e_color=True, ext_level=None):
             events.append((i, "S", np.nan, None))
         if ready and (not e_color or c > o):        # E candle must close in the trade direction (green for a buy)
             events.append((i, "E", np.nan, None))
+        states[i] = state
+        levels[i] = cur_low
 
-    final = dict(state=state, level=cur_low, attempt=attempt, divergence=divergence,
+    final = dict(state=state, level=cur_low, attempt=attempt, divergence=divergence, states=states, levels=levels,
                  info=info_at(n - 1) if (state == 2 and n) else None)
     return events, final
 
@@ -978,14 +989,14 @@ def main():
                 for side in ("long", "short"):
                     sign = 1 if side == "long" else -1
                     dd = res[tf]["dd"][side]
-                    for i, stop, e100 in conf_events(dd):
+                    for i, stop, e100, why in conf_events(dd, res[tf]["sides"][side][0], res[tf]["sides"][side][1]):
                         if i < last - lookback + 1:
                             continue
                         key, bar_iso = f"{name}|{tf}|{side}|C", times[i].isoformat()
                         if state.get(key) == bar_iso:
                             continue
                         msg = conf_message(name, tf, side, times[i], sign * float(dd["c"][i]), sign * e100,
-                                           sign * float(dd["emas"][i]), float(dd["atr"][i]), sign * stop)
+                                           sign * float(dd["emas"][i]), float(dd["atr"][i]), sign * stop, why)
                         print(msg)
                         if not args.dry_run:
                             send_telegram(msg)
