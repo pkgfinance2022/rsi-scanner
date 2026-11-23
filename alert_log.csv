@@ -64,3 +64,4 @@ sent_utc,ticker,timeframe,side,event,bar_time_utc,price,line_level,risk_pct,ema2
 2026-11-21 05:03,SILVER,W,short,TARGET,2026-11-16T05:00:00+00:00,,45.0965,,,,,4H:- D:- W:-
 2026-11-21 05:03,ALUMINIUM,W,short,TARGET,2026-11-16T05:00:00+00:00,,2790.13,,,,,4H:- D:- W:-
 2026-11-21 21:03,FRA40,4H,short,C,2026-11-19T16:00:00+00:00,8084.91,,,,,,
+2026-11-23 05:03,DJ30,W,short,B,2026-11-18T05:00:00+00:00,48147.3,54744.3,13.70,9.60,0.70,2,4H:- D:- W:ACTIVE
